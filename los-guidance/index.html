@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LOS Guidance</title>
+<meta name="description" content="Interactive line-of-sight path-following guidance on a waypoint path with polynomial transition curves. Drag the path while the vessels follow it.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a chart-table bench. Big canvas left, instrument column right, strip charts below.
+   Palette: cool slate neutrals; projection LOS rust, particle LOS steel blue; path ink. */
+:root{
+  --bg:#f3f4f6; --panel:#ffffff; --fg:#1b2130; --muted:#5b6475; --line:#d6dae2; --grid:#e6e9ee;
+  --a:#c0491f; --b:#1f6fa8; --path:#2b3140; --accent:#1f6fa8;
+  --sans:"IBM Plex Sans",system-ui,Segoe UI,Roboto,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#12161d; --panel:#1a2029; --fg:#e6e9ee; --muted:#9aa3b2; --line:#2c3440; --grid:#222a35;
+  --a:#e8744a; --b:#5aa4de; --path:#d7dce5; --accent:#5aa4de; color-scheme:dark }}
+:root[data-theme="dark"]{
+  --bg:#12161d; --panel:#1a2029; --fg:#e6e9ee; --muted:#9aa3b2; --line:#2c3440; --grid:#222a35;
+  --a:#e8744a; --b:#5aa4de; --path:#d7dce5; --accent:#5aa4de; color-scheme:dark }
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 var(--sans);padding:12px 16px}
+h1{font-size:18px;font-weight:600;margin:0;letter-spacing:.01em}
+.sub{color:var(--muted);font-size:13px;margin:2px 0 10px}
+.sub a{color:var(--accent)}
+.app{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:12px;align-items:start}
+@media (max-width:900px){.app{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;min-width:0}
+.world{position:relative}
+canvas{display:block;width:100%;height:auto;touch-action:none;border-radius:6px}
+#world{aspect-ratio:16/9;max-width:100%}
+.hint{position:absolute;left:10px;top:8px;font-size:12px;color:var(--muted);pointer-events:none;
+  background:color-mix(in srgb,var(--panel) 80%,transparent);padding:2px 6px;border-radius:4px}
+.legend{position:absolute;right:10px;top:8px;font-size:12px;display:flex;flex-direction:column;gap:2px;
+  background:color-mix(in srgb,var(--panel) 85%,transparent);padding:4px 8px;border-radius:4px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+.controls{padding:10px 12px;display:flex;flex-direction:column;gap:8px;font-size:13px}
+.controls h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:6px 0 0;font-weight:600}
+.row{display:grid;grid-template-columns:1fr 64px;gap:8px;align-items:center}
+.row label{display:flex;justify-content:space-between;gap:6px}
+.row label span.nm sub{font-size:.75em}
+.row label span.v{font-family:var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--accent);margin:0}
+.seg{display:flex;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.seg button{flex:1;border:0;background:transparent;color:var(--fg);padding:6px 4px;font:inherit;cursor:pointer}
+.seg button[aria-pressed=true]{background:var(--accent);color:#fff}
+.btns{display:flex;gap:6px;flex-wrap:wrap}
+button.b{border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:5px;padding:6px 10px;font:inherit;cursor:pointer}
+button.b:hover{border-color:var(--accent)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.chk{display:flex;align-items:center;gap:8px}
+.bottom{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+@media (max-width:900px){.bottom{grid-template-columns:1fr}}
+.strip{padding:8px 10px}
+.strip h3{font-size:12px;margin:0 0 4px;color:var(--muted);font-weight:500}
+.strip canvas{aspect-ratio:3/1;max-width:100%}
+table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:10px}
+th,td{text-align:right;padding:3px 6px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;font-family:var(--mono)}
+th:first-child,td:first-child{text-align:left;font-family:var(--sans)}
+th{color:var(--muted);font-weight:500}
+.ac{color:var(--a)} .bc{color:var(--b)}
+.eq{font-family:var(--mono);font-size:11.5px;color:var(--muted);line-height:1.5;margin-top:6px}
+footer{color:var(--muted);font-size:12px;margin-top:14px}
+footer a{color:var(--accent)}
+.crumb{font-size:12.5px;margin:0 0 4px}.crumb a{color:var(--muted);text-decoration:none}.crumb a:hover{color:var(--accent)}
+.watch{font-size:13px;margin:-4px 0 10px}.watch a{color:var(--accent)}
+</style>
+</head>
+<body>
+
+<nav class="crumb"><a href="../">← Autonomy Playground</a></nav>
+<h1>LOS Guidance</h1>
+<div class="sub">Line-of-sight (LOS) guidance on a waypoint path, with two ways of choosing the reference point on the path: the orthogonal projection of the vessel, and a propagated path particle. Vessels are modelled as point particles with a first-order velocity lag and drawn pointing along their velocity. The path is straight legs joined by polynomial transition curves (Kobryń, 2014), closed into a loop by default; the dashed line joins the waypoints. Drag the square handles to reshape the path while the vessels are moving, drag a vessel to move it.</div>
+
+<div class="watch">▶ Video: <a href="https://youtu.be/e-B-lBFzHRs">Line-of-Sight (LOS) Guidance Explained: Path Following for USVs, AUVs and Drones</a> · playlist <a href="https://www.youtube.com/playlist?list=PLcYnzy5eJtss">Guidance and Control</a></div>
+<div class="app">
+  <div class="panel world">
+    <canvas id="world" width="1280" height="720" aria-label="Path, vessels and reference points"></canvas>
+    <div class="hint" id="hint">t = 0.0 s</div>
+    <div class="legend">
+      <div><span class="sw" style="background:var(--a)"></span>LOS, projected reference</div>
+      <div><span class="sw" style="background:var(--b)"></span>LOS, propagated particle</div>
+      <div style="color:var(--muted)">| reference point on the path · → velocity v · ⇢ command v<sub>d</sub> · ▲ travel direction</div>
+    </div>
+  </div>
+
+  <div class="panel controls">
+    <div class="btns">
+      <button class="b" id="run">Pause</button>
+      <button class="b" id="resetVeh">Reset vessels</button>
+      <button class="b" id="resetPath">Reset path</button>
+      <button class="b" id="clearTrails">Clear trails</button>
+    </div>
+    <h2>Task</h2>
+    <div class="seg" role="group" aria-label="Travel direction">
+      <button id="dirFwd" aria-pressed="true">Forward ▲</button>
+      <button id="dirRev" aria-pressed="false">Reverse ▼</button>
+    </div>
+    <div class="row"><label for="U"><span class="nm">U speed [m/s]</span> <span class="v" id="UV"></span></label><input type="range" id="U" min="0" max="3" step="0.05" value="1.5"></div>
+    <div class="row"><label for="as"><span class="nm">a<sub>s</sub> ramp [m/s²]</span> <span class="v" id="asV"></span></label><input type="range" id="as" min="0.02" max="1" step="0.01" value="0.1"></div>
+    <h2>Path</h2>
+    <label class="chk"><input type="checkbox" id="loop" checked> closed loop</label>
+    <div class="row"><label for="Rmin"><span class="nm">R<sub>min</sub> turn radius [m]</span> <span class="v" id="RminV"></span></label><input type="range" id="Rmin" min="2" max="60" step="1" value="15"></div>
+    <h2>Guidance</h2>
+    <div class="row"><label for="Delta"><span class="nm">Δ lookahead [m]</span> <span class="v" id="DeltaV"></span></label><input type="range" id="Delta" min="1" max="40" step="0.5" value="10"></div>
+    <div class="row"><label for="Ds"><span class="nm">Δ<sub>s</sub> particle sat [m]</span> <span class="v" id="DsV"></span></label><input type="range" id="Ds" min="0.5" max="20" step="0.5" value="5"></div>
+    <div class="row"><label for="ks"><span class="nm">k<sub>s</sub> particle gain [1/s]</span> <span class="v" id="ksV"></span></label><input type="range" id="ks" min="0.02" max="1" step="0.01" value="0.3"></div>
+    <h2>Vessel</h2>
+    <div class="row"><label for="tau"><span class="nm">τ velocity lag [s]</span> <span class="v" id="tauV"></span></label><input type="range" id="tau" min="0" max="8" step="0.1" value="2"></div>
+    <div class="row"><label for="Umax"><span class="nm">speed cap [m/s]</span> <span class="v" id="UmaxV"></span></label><input type="range" id="Umax" min="0.5" max="6" step="0.1" value="6"></div>
+    <h2>Simulation</h2>
+    <div class="row"><label for="speed"><span class="nm">time scale ×</span> <span class="v" id="speedV"></span></label><input type="range" id="speed" min="0.5" max="20" step="0.5" value="4"></div>
+    <div class="eq">v<sub>d</sub> = U η<sub>d</sub>, η<sub>d</sub> = (Δ t − e)/√(Δ²+|e|²)<br>e = cross-track error to the reference point<br>projection: s<sub>r</sub> = argmin |p − p<sub>r</sub>(s)|<br>particle: ṡ<sub>r</sub> = t·ṗ + Δ<sub>s</sub> tanh(k<sub>s</sub>s<sub>e</sub>/Δ<sub>s</sub>)<br>t = travel direction × path tangent</div>
+  </div>
+</div>
+
+<div class="bottom">
+  <div class="panel strip"><h3>Cross-track error |e| [m] (last 120 s)</h3><canvas id="chartE" width="900" height="300"></canvas></div>
+  <div class="panel strip"><h3>Speed |v| [m/s], dashed U</h3><canvas id="chartV" width="900" height="300"></canvas></div>
+</div>
+<div class="panel" style="padding:4px 10px 8px;margin-top:12px">
+<table aria-label="Live state">
+<thead><tr><th>law</th><th>|e| m</th><th>s<sub>e</sub> m</th><th>|v<sub>d</sub>| m/s</th><th>|v| m/s</th><th>s<sub>r</sub> m</th><th>U m/s</th></tr></thead>
+<tbody>
+<tr><td class="ac">LOS, projected reference</td><td id="a0"></td><td id="a1"></td><td id="a2"></td><td id="a3"></td><td id="a4"></td><td id="a5"></td></tr>
+<tr><td class="bc">LOS, propagated particle</td><td id="b0"></td><td id="b1"></td><td id="b2"></td><td id="b3"></td><td id="b4"></td><td id="b5"></td></tr>
+</tbody></table>
+</div>
+
+<footer>
+Guidance: lookahead-based line of sight in vector form, with the reference point either projected onto the path or propagated with a path-variable update law. Path: straight legs joined by polynomial transition curves (Kobryń, 2014). Video: <a href="https://youtu.be/e-B-lBFzHRs">Line-of-Sight (LOS) Guidance Explained</a>; more in the playlist <a href="https://www.youtube.com/playlist?list=PLcYnzy5eJtss">Guidance and Control</a>. Source and references: <a href="https://github.com/erlendcoates/autonomy-playground">github.com/erlendcoates/autonomy-playground</a>.
+</footer>
+
+<script>
+(() => {
+'use strict';
+// ------------------------------------------------------------------ path: legs + polynomial transition turns
+// Kobryn (2014) symmetric polynomial transition at a corner of angle theta between legs d1 -> d2 (Kjerstad & Coates
+// 2024, eqs. 34-35):  p_t(w) = P0 + x_K tan(u) (w - 2w^3 + w^4) a + x_K w c,  w in [0,1],
+// u = theta/2, x_K = 3 R_min tan(u), c = chord direction (bisector), a = normal to c towards d1.
+// The turn starts L_t = x_K/(2 cos u) before the corner; short legs shrink the turns.
+const DEFAULT_WPS = () => [[10,40],[50,90],[110,70],[160,110],[220,90],[240,30],[170,5],[60,10]];
+let wps = DEFAULT_WPS();
+const path = { X:[], Y:[], S:[], TX:[], TY:[], L:0, loop:true, isLoop:false };
+const P = { U:1.5, as:0.1, Delta:10, Ds:5, ks:0.3, tau:2, Umax:6, speed:4, Rmin:15 };
+
+function shape(w){ return [w-2*w**3+w**4, 1-6*w*w+4*w**3]; }
+
+function buildPath(){
+  const W=wps.map(p=>[p[0],p[1]]); const n=W.length; const loop=path.loop && n>=3;
+  const pts = loop? W.concat([W[0]]) : W;
+  const dirs=[],lens=[];
+  for(let i=0;i<pts.length-1;i++){ const dx=pts[i+1][0]-pts[i][0], dy=pts[i+1][1]-pts[i][1]; const l=Math.hypot(dx,dy)||1e-9; dirs.push([dx/l,dy/l]); lens.push(l); }
+  const nd=dirs.length;
+  // corners: node i where a turn is inserted (1..n-2 open, 0..n-1 loop)
+  const corners={};
+  const cornerIdx = loop? [...Array(n).keys()] : [...Array(Math.max(0,n-2)).keys()].map(k=>k+1);
+  for(const i of cornerIdx){
+    const d1=dirs[(i-1+nd)%nd], d2=dirs[i%nd];
+    const dot=Math.max(-1,Math.min(1,d1[0]*d2[0]+d1[1]*d2[1])); const theta=Math.acos(dot);
+    if(theta<1e-6||theta>Math.PI-1e-3) continue;
+    const u=theta/2; const Lt=3*P.Rmin*Math.tan(u)/(2*Math.cos(u));
+    corners[i]={u,d1,d2,Lt};
+  }
+  // a turn is symmetric about its corner: each corner gets up to half of each of its legs, then any
+  // leftover on a leg goes to the corner that still wants more
+  for(const key of Object.keys(corners)){ const i=+key, cr=corners[i]; cr.ideal=cr.Lt; cr.Lt=Math.min(cr.Lt, lens[(i-1+nd)%nd]/2, lens[i%nd]/2); }
+  const slack=k=>{ const a=corners[k], b=corners[(k+1)%n]; return lens[k]-(a?a.Lt:0)-(b?b.Lt:0); };
+  for(const key of Object.keys(corners)){ const i=+key, cr=corners[i]; const extra=Math.min(cr.ideal-cr.Lt, slack((i-1+nd)%nd), slack(i%nd)); if(extra>0) cr.Lt+=extra; }
+  for(const key of Object.keys(corners)){ const i=+key, cr=corners[i]; const {u,d1,d2,Lt}=cr; const xK=2*Lt*Math.cos(u);
+    let c=[d1[0]+d2[0],d1[1]+d2[1]]; let cm=Math.hypot(c[0],c[1]); c=[c[0]/cm,c[1]/cm];
+    let a=[d1[0]-(d1[0]*c[0]+d1[1]*c[1])*c[0], d1[1]-(d1[0]*c[0]+d1[1]*c[1])*c[1]]; let am=Math.hypot(a[0],a[1]); a=[a[0]/am,a[1]/am];
+    cr.xK=xK; cr.k=xK*Math.tan(u); cr.a=a; cr.c=c; cr.P0=[W[i][0]-Lt*d1[0], W[i][1]-Lt*d1[1]];
+  }
+  // assemble samples
+  const X=[],Y=[],TX=[],TY=[];
+  const push=(x,y,tx,ty)=>{X.push(x);Y.push(y);TX.push(tx);TY.push(ty);};
+  const first=corners[0];
+  let start=[W[0][0]+(first?dirs[0][0]*first.Lt:0), W[0][1]+(first?dirs[0][1]*first.Lt:0)];
+  for(let i=0;i<nd;i++){
+    const j=(i+1)%n; const corner=corners[j];
+    const end=[pts[i+1][0]-dirs[i][0]*(corner?corner.Lt:0), pts[i+1][1]-dirs[i][1]*(corner?corner.Lt:0)];
+    const segLen=Math.hypot(end[0]-start[0],end[1]-start[1]);
+    if(segLen>1e-9){ const m=Math.max(2,Math.ceil(segLen/1.0)); for(let k=0;k<m;k++){const u=k/m; push(start[0]+(end[0]-start[0])*u,start[1]+(end[1]-start[1])*u,dirs[i][0],dirs[i][1]);} }
+    if(corner){
+      const M=60;
+      for(let k=0;k<M;k++){ const w=k/M; const [f,f1]=shape(w);
+        const x=corner.P0[0]+corner.k*f*corner.a[0]+corner.xK*w*corner.c[0], y=corner.P0[1]+corner.k*f*corner.a[1]+corner.xK*w*corner.c[1];
+        let tx=corner.k*f1*corner.a[0]+corner.xK*corner.c[0], ty=corner.k*f1*corner.a[1]+corner.xK*corner.c[1]; const tm=Math.hypot(tx,ty)||1; push(x,y,tx/tm,ty/tm); }
+      const dn=dirs[(i+1)%nd]; start=[W[j][0]+dn[0]*corner.Lt, W[j][1]+dn[1]*corner.Lt];
+    } else { start=[pts[i+1][0],pts[i+1][1]]; }
+  }
+  if(loop){ push(X[0],Y[0],TX[0],TY[0]); } else { push(start[0],start[1],dirs[nd-1][0],dirs[nd-1][1]); }
+  const S=[0]; for(let i=1;i<X.length;i++) S.push(S[i-1]+Math.hypot(X[i]-X[i-1],Y[i]-Y[i-1]));
+  path.X=X;path.Y=Y;path.S=S;path.TX=TX;path.TY=TY;path.L=S[S.length-1];path.isLoop=loop;
+}
+function wrapS(s){ if(path.isLoop){ s=s%path.L; if(s<0) s+=path.L; return s; } return Math.max(0,Math.min(path.L,s)); }
+function idxOf(s){ const S=path.S; let lo=0,hi=S.length-1; while(lo<hi){const m=(lo+hi+1)>>1; if(S[m]<=s) lo=m; else hi=m-1;} return lo; }
+function pathPos(s){ s=wrapS(s); const i=idxOf(s); const j=Math.min(i+1,path.X.length-1); const ds=path.S[j]-path.S[i]; const a=ds>0?(s-path.S[i])/ds:0;
+  return [path.X[i]+(path.X[j]-path.X[i])*a, path.Y[i]+(path.Y[j]-path.Y[i])*a]; }
+function pathTan(s){ s=wrapS(s); const i=idxOf(s); const j=Math.min(i+1,path.X.length-1); const ds=path.S[j]-path.S[i]; const a=ds>0?(s-path.S[i])/ds:0;
+  let tx=path.TX[i]+(path.TX[j]-path.TX[i])*a, ty=path.TY[i]+(path.TY[j]-path.TY[i])*a; const m=Math.hypot(tx,ty)||1; return [tx/m,ty/m]; }
+function pathProject(px,py){
+  let best=0,bd=Infinity; for(let i=0;i<path.X.length;i++){const d=(path.X[i]-px)**2+(path.Y[i]-py)**2; if(d<bd){bd=d;best=i;}}
+  let s=path.S[best];
+  for(const j of [best-1,best]){ if(j<0||j+1>=path.X.length) continue;
+    const ax=path.X[j],ay=path.Y[j],bx=path.X[j+1],by=path.Y[j+1]; const vx=bx-ax,vy=by-ay; const l2=vx*vx+vy*vy; if(l2===0) continue;
+    const u=Math.max(0,Math.min(1,((px-ax)*vx+(py-ay)*vy)/l2)); const d=(ax+u*vx-px)**2+(ay+u*vy-py)**2; if(d<bd){bd=d;s=path.S[j]+u*(path.S[j+1]-path.S[j]);} }
+  return wrapS(s);
+}
+
+// ------------------------------------------------------------------ state
+let dir=1, running=true, tSim=0; const DT=0.02;
+function makeVehicle(color){ return { color, p:[0,60], v:[0,0], s_r:0, U:0, vd:[0,0], psi:0, trail:[], hist:{t:[],e:[],v:[],U:[]} }; }
+const veh={ proj:makeVehicle('a'), part:makeVehicle('b') };
+function resetVehicles(){ for(const k of ['proj','part']){ const V=veh[k]; V.p=[0,60]; V.v=[0,0]; V.s_r=pathProject(0,60); { const [tx,ty]=pathTan(V.s_r); V.psi=Math.atan2(dir*ty,dir*tx); } V.U=0; V.vd=[0,0]; V.trail=[]; V.hist={t:[],e:[],v:[],U:[]}; } tSim=0; }
+
+// ------------------------------------------------------------------ guidance
+function step(V,law,dt){
+  const dU=Math.max(-P.as*dt,Math.min(P.as*dt,P.U-V.U)); V.U+=dU;                        // speed ramp
+  if(law==='proj') V.s_r=pathProject(V.p[0],V.p[1]);                                          // reference = nearest point
+  const [prx,pry]=pathPos(V.s_r); let [tx,ty]=pathTan(V.s_r); tx*=dir; ty*=dir;              // t = travel-direction tangent
+  const ptx=V.p[0]-prx, pty=V.p[1]-pry; const se=tx*ptx+ty*pty; const ex=ptx-se*tx, ey=pty-se*ty; const e2=ex*ex+ey*ey;
+  const D=Math.sqrt(P.Delta*P.Delta+e2); const etx=(P.Delta*tx-ex)/D, ety=(P.Delta*ty-ey)/D;   // LOS direction
+  let vdx=V.U*etx, vdy=V.U*ety;
+  const nvd=Math.hypot(vdx,vdy); if(nvd>P.Umax){vdx*=P.Umax/nvd;vdy*=P.Umax/nvd;} V.vd=[vdx,vdy];
+  if(P.tau>0){ const a=dt/P.tau; V.v[0]+=a*(vdx-V.v[0]); V.v[1]+=a*(vdy-V.v[1]); } else V.v=[vdx,vdy];   // velocity lag
+  V.p[0]+=V.v[0]*dt; V.p[1]+=V.v[1]*dt; if(Math.hypot(V.v[0],V.v[1])>0.05) V.psi=Math.atan2(V.v[1],V.v[0]);
+  if(law==='part'){ const srdot=dir*((tx*V.v[0]+ty*V.v[1])+P.Ds*Math.tanh(P.ks*se/P.Ds)); V.s_r=wrapS(V.s_r+srdot*dt); }   // particle update
+  V.last={e:Math.sqrt(e2),se,vd:nvd,v:Math.hypot(V.v[0],V.v[1])};
+}
+
+// ------------------------------------------------------------------ rendering
+const cv=document.getElementById('world'), ctx=cv.getContext('2d');
+const WORLD={x0:-20,x1:260,y0:-10,y1:140}; let sc=1,ox=0,oy=0;
+function fitWorld(){ const w=cv.width,h=cv.height; sc=Math.min(w/(WORLD.x1-WORLD.x0),h/(WORLD.y1-WORLD.y0)); ox=(w-sc*(WORLD.x1-WORLD.x0))/2-WORLD.x0*sc; oy=(h+sc*(WORLD.y1-WORLD.y0))/2+WORLD.y0*sc; }
+const W2S=(x,y)=>[ox+x*sc,oy-y*sc], S2W=(X,Y)=>[(X-ox)/sc,(oy-Y)/sc];
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function arrow(x0,y0,x1,y1,color,width,dashed){ ctx.save(); ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=width; if(dashed) ctx.setLineDash([5,4]);
+  ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke(); ctx.setLineDash([]); const a=Math.atan2(y1-y0,x1-x0), L=7;
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x1-L*Math.cos(a-0.4),y1-L*Math.sin(a-0.4)); ctx.lineTo(x1-L*Math.cos(a+0.4),y1-L*Math.sin(a+0.4)); ctx.closePath(); ctx.fill(); ctx.restore(); }
+
+function hull(X,Y,psi,col){ // ~8 m vessel, at least 22 px long; body frame x forward, y to port (screen y is flipped)
+  const L=Math.max(28,8*sc), B=0.36*L; ctx.save(); ctx.translate(X,Y); ctx.rotate(-psi);
+  ctx.beginPath(); ctx.moveTo(0.5*L,0);
+  ctx.quadraticCurveTo(0.3*L,-0.5*B,0.05*L,-0.5*B); ctx.lineTo(-0.5*L,-0.45*B); ctx.lineTo(-0.5*L,0.45*B); ctx.lineTo(0.05*L,0.5*B);
+  ctx.quadraticCurveTo(0.3*L,0.5*B,0.5*L,0); ctx.closePath();
+  ctx.fillStyle=col; ctx.globalAlpha=.25; ctx.fill(); ctx.globalAlpha=1; ctx.strokeStyle=col; ctx.lineWidth=2; ctx.stroke();
+  ctx.fillStyle=col; ctx.beginPath(); ctx.arc(0,0,2.5,0,7); ctx.fill(); ctx.restore(); }
+function draw(){
+  fitWorld(); const w=cv.width,h=cv.height; ctx.clearRect(0,0,w,h); ctx.fillStyle=css('--panel'); ctx.fillRect(0,0,w,h);
+  ctx.strokeStyle=css('--grid'); ctx.lineWidth=1; ctx.font='11px '+css('--mono'); ctx.fillStyle=css('--muted');
+  for(let x=Math.ceil(WORLD.x0/20)*20;x<=WORLD.x1;x+=20){const [X]=W2S(x,0); ctx.beginPath();ctx.moveTo(X,0);ctx.lineTo(X,h);ctx.stroke(); ctx.fillText(x+'',X+2,h-4);}
+  for(let y=Math.ceil(WORLD.y0/20)*20;y<=WORLD.y1;y+=20){const [,Y]=W2S(0,y); ctx.beginPath();ctx.moveTo(0,Y);ctx.lineTo(w,Y);ctx.stroke(); ctx.fillText(y+'',4,Y-2);}
+  // waypoint polygon
+  ctx.save(); ctx.strokeStyle=css('--muted'); ctx.globalAlpha=.9; ctx.lineWidth=1.3; ctx.setLineDash([6,5]); ctx.beginPath();
+  wps.forEach(([x,y],i)=>{const [X,Y]=W2S(x,y); if(i===0) ctx.moveTo(X,Y); else ctx.lineTo(X,Y);}); if(path.isLoop) ctx.closePath(); ctx.stroke(); ctx.restore();
+  // path
+  ctx.strokeStyle=css('--path'); ctx.lineWidth=2.5; ctx.beginPath();
+  for(let i=0;i<path.X.length;i++){const [X,Y]=W2S(path.X[i],path.Y[i]); if(i===0) ctx.moveTo(X,Y); else ctx.lineTo(X,Y);} ctx.stroke();
+  // arc-length ticks and travel-direction arrows every 50 m
+  ctx.fillStyle=css('--muted'); ctx.font='10px '+css('--mono');
+  for(let s=0;s<path.L;s+=50){const [x,y]=pathPos(s); const [tx,ty]=pathTan(s); const [X,Y]=W2S(x,y); ctx.beginPath(); ctx.arc(X,Y,2,0,7); ctx.fill(); ctx.fillText('s='+s,X+4,Y-4);
+    const ux=dir*tx*sc, uy=-dir*ty*sc; ctx.save(); ctx.fillStyle=css('--path'); ctx.beginPath(); ctx.moveTo(X+ux*5,Y+uy*5); ctx.lineTo(X-uy*3,Y+ux*3); ctx.lineTo(X+uy*3,Y-ux*3); ctx.closePath(); ctx.fill(); ctx.restore(); }
+  for(const [x,y] of wps){const [X,Y]=W2S(x,y); ctx.fillStyle=css('--panel'); ctx.strokeStyle=css('--path'); ctx.lineWidth=1.5; ctx.fillRect(X-5,Y-5,10,10); ctx.strokeRect(X-5,Y-5,10,10);}
+  for(const k of ['proj','part']){ const V=veh[k], col=css('--'+V.color);
+    if(V.trail.length>1){ ctx.strokeStyle=col; ctx.globalAlpha=.45; ctx.lineWidth=1.5; ctx.beginPath(); for(let i=0;i<V.trail.length;i++){const [X,Y]=W2S(V.trail[i][0],V.trail[i][1]); if(i===0) ctx.moveTo(X,Y); else ctx.lineTo(X,Y);} ctx.stroke(); ctx.globalAlpha=1; }
+    const [prx,pry]=pathPos(V.s_r); const [tx,ty]=pathTan(V.s_r); const [PX,PY]=W2S(prx,pry);
+    ctx.strokeStyle=col; ctx.lineWidth=2.5; ctx.beginPath(); ctx.moveTo(PX-ty*9,PY-tx*9); ctx.lineTo(PX+ty*9,PY+tx*9); ctx.stroke();
+    const [X,Y]=W2S(V.p[0],V.p[1]); ctx.strokeStyle=col; ctx.globalAlpha=.35; ctx.lineWidth=1; ctx.setLineDash([3,4]); ctx.beginPath(); ctx.moveTo(X,Y); ctx.lineTo(PX,PY); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha=1;
+    arrow(X,Y,X+V.vd[0]*6*sc,Y-V.vd[1]*6*sc,col,1.2,true); arrow(X,Y,X+V.v[0]*6*sc,Y-V.v[1]*6*sc,col,2,false);
+    hull(X,Y,V.psi,col); }
+  drawStrip(document.getElementById('chartE'),'e',null); drawStrip(document.getElementById('chartV'),'v','U');
+  for(const [k,pre] of [['proj','a'],['part','b']]){ const V=veh[k]; if(!V.last) continue; const L=V.last;
+    [L.e,L.se,L.vd,L.v,V.s_r,V.U].forEach((x,i)=>document.getElementById(pre+i).textContent=x.toFixed(2)); }
+  document.getElementById('hint').textContent=`t = ${tSim.toFixed(1)} s · ×${P.speed} · ${path.isLoop?'loop':'open'} L = ${path.L.toFixed(0)} m · ${dir>0?'forward':'reverse'}${running?'':' · paused'}`;
+}
+function drawStrip(c,key,key2){
+  const g=c.getContext('2d'); const w=c.width,h=c.height; g.clearRect(0,0,w,h); const win=120,t1=tSim,t0=Math.max(0,t1-win);
+  let ymax=1e-6; for(const k of ['proj','part']){const H=veh[k].hist; for(let i=0;i<H.t.length;i++) if(H.t[i]>=t0) ymax=Math.max(ymax,H[key][i],key2?H[key2][i]:0);} ymax=Math.ceil(ymax*1.1*2)/2||1;
+  const padL=36,padB=18,padT=6,padR=6; const X=t=>padL+(t-t0)/win*(w-padL-padR), Y=v=>h-padB-(v/ymax)*(h-padB-padT);
+  g.strokeStyle=css('--grid'); g.lineWidth=1; g.font='11px '+css('--mono'); g.fillStyle=css('--muted');
+  for(let k=0;k<=4;k++){const v=ymax*k/4; g.beginPath(); g.moveTo(padL,Y(v)); g.lineTo(w-padR,Y(v)); g.stroke(); g.fillText(v.toFixed(1),2,Y(v)+4);}
+  for(let t=Math.ceil(t0/20)*20;t<=t1;t+=20){ g.beginPath(); g.moveTo(X(t),padT); g.lineTo(X(t),h-padB); g.stroke(); g.fillText(t+' s',X(t)+2,h-4); }
+  for(const k of ['proj','part']){ const V=veh[k],H=V.hist,col=css('--'+V.color);
+    const line=(kk,dash)=>{ g.strokeStyle=col; g.lineWidth=dash?1:1.8; g.setLineDash(dash?[4,3]:[]); g.beginPath(); let first=true; for(let i=0;i<H.t.length;i++){ if(H.t[i]<t0) continue; const x=X(H.t[i]),y=Y(H[kk][i]); if(first){g.moveTo(x,y);first=false;} else g.lineTo(x,y);} g.stroke(); g.setLineDash([]); };
+    line(key,false); if(key2) line(key2,true); }
+}
+
+// ------------------------------------------------------------------ loop
+let last=performance.now(),acc=0,lastHist=-1,lastTrail=-1;
+function frame(now){ const dtReal=Math.min(0.1,(now-last)/1000); last=now;
+  if(running){ acc+=dtReal*P.speed; let n=Math.min(400,Math.floor(acc/DT)); acc-=n*DT;
+    for(let i=0;i<n;i++){ step(veh.proj,'proj',DT); step(veh.part,'part',DT); tSim+=DT;
+      if(tSim-lastHist>=0.25){ lastHist=tSim; for(const k of ['proj','part']){const V=veh[k],H=V.hist; H.t.push(tSim);H.e.push(V.last.e);H.v.push(V.last.v);H.U.push(V.U); if(H.t.length>600){H.t.shift();H.e.shift();H.v.shift();H.U.shift();}} }
+      if(tSim-lastTrail>=0.5){ lastTrail=tSim; for(const k of ['proj','part']){const V=veh[k]; V.trail.push([V.p[0],V.p[1]]); if(V.trail.length>2000) V.trail.shift();} } } }
+  draw(); requestAnimationFrame(frame); }
+
+// ------------------------------------------------------------------ controls
+for(const id of ['U','as','Delta','Ds','ks','tau','Umax','speed','Rmin']){ const el=document.getElementById(id),out=document.getElementById(id+'V');
+  const upd=()=>{ P[id]=parseFloat(el.value); out.textContent= id==='Umax'&&P[id]>=6?'off':P[id].toFixed(id==='speed'||id==='Rmin'?1:2); if(id==='Umax'&&P[id]>=6) P[id]=1e9; if(id==='Rmin'&&path.X.length) rebuildKeepingPoints(); };
+  el.addEventListener('input',upd); upd(); }
+function setDir(d){ dir=d; document.getElementById('dirFwd').setAttribute('aria-pressed',d>0); document.getElementById('dirRev').setAttribute('aria-pressed',d<0); }
+document.getElementById('dirFwd').onclick=()=>setDir(1); document.getElementById('dirRev').onclick=()=>setDir(-1);
+document.getElementById('run').onclick=e=>{running=!running; e.target.textContent=running?'Pause':'Run';};
+document.getElementById('resetVeh').onclick=()=>resetVehicles();
+document.getElementById('clearTrails').onclick=()=>{for(const k of ['proj','part']) veh[k].trail=[];};
+document.getElementById('resetPath').onclick=()=>{wps=DEFAULT_WPS(); rebuildKeepingPoints();};
+document.getElementById('loop').onchange=e=>{ path.loop=e.target.checked; rebuildKeepingPoints(); };
+document.addEventListener('keydown',e=>{ if(e.code==='Space'&&e.target===document.body){e.preventDefault();document.getElementById('run').click();} });
+
+function rebuildKeepingPoints(){ // keep the reference points as world points, re-project them on the new path
+  const keep={}; for(const k of ['proj','part']) keep[k]=path.X.length?pathPos(veh[k].s_r):null;
+  buildPath();
+  for(const k of ['proj','part']) if(keep[k]) veh[k].s_r=pathProject(keep[k][0],keep[k][1]); }
+
+let drag=null;
+function hit(ev){ const r=cv.getBoundingClientRect(); const X=(ev.clientX-r.left)*cv.width/r.width, Y=(ev.clientY-r.top)*cv.height/r.height;
+  for(let i=0;i<wps.length;i++){const [HX,HY]=W2S(wps[i][0],wps[i][1]); if(Math.hypot(HX-X,HY-Y)<12) return {type:'wp',i};}
+  for(const k of ['proj','part']){const [VX,VY]=W2S(veh[k].p[0],veh[k].p[1]); if(Math.hypot(VX-X,VY-Y)<16) return {type:'veh',k};}
+  return null; }
+cv.addEventListener('pointerdown',ev=>{ const h=hit(ev); if(!h) return; cv.setPointerCapture(ev.pointerId); drag=h; });
+cv.addEventListener('pointermove',ev=>{ if(!drag) return; const r=cv.getBoundingClientRect(); const X=(ev.clientX-r.left)*cv.width/r.width, Y=(ev.clientY-r.top)*cv.height/r.height; const [wx,wy]=S2W(X,Y);
+  if(drag.type==='wp'){ wps[drag.i]=[wx,wy]; rebuildKeepingPoints(); }
+  else { const V=veh[drag.k]; V.p=[wx,wy]; V.v=[0,0]; V.trail=[]; V.s_r=pathProject(wx,wy); } });
+const endDrag=()=>{drag=null;}; cv.addEventListener('pointerup',endDrag); cv.addEventListener('pointercancel',endDrag);
+
+buildPath(); resetVehicles(); requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

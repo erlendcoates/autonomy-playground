@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>State Observer</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../common/style.css">
+<style>
+  #hint{top:auto;bottom:8px}
+  @media (max-width:600px){#view{aspect-ratio:4/3}}
+  @media (max-width:480px){#view{aspect-ratio:1/1}}
+  .seg.three button{font-size:12.5px}
+  .readout{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;line-height:1.5}
+  .readout b{color:var(--fg);font-weight:500}
+  .strip h3{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center}
+  .strip h3 .shows{display:flex;gap:10px;flex-wrap:wrap;font-size:12px}
+  .strip h3 .shows label{display:flex;align-items:center;gap:4px;cursor:pointer}
+  .tablebox{padding:8px 10px}
+  .tablebox h3{font-size:12px;margin:0 0 4px;color:var(--muted);font-weight:500}
+  .tablebox .note{margin-top:8px}
+  canvas.square.eig{max-width:300px;margin:0 auto}
+  td.feed::after{content:" ◂ PD";color:var(--muted);font-family:var(--sans);font-size:11px}
+  .dim{opacity:.45}
+  .app.so{grid-template-areas:"view ctrl" "charts ctrl";grid-template-rows:auto 1fr}
+  .so>.view{grid-area:view} .so>.controls{grid-area:ctrl} .so>.charts{grid-area:charts;display:flex;flex-direction:column;gap:12px}
+  @media (max-width:900px){.app.so{grid-template-areas:"view" "ctrl" "charts";grid-template-rows:auto}}
+  th{vertical-align:bottom;font-family:var(--sans);font-size:12px}
+</style>
+</head>
+<body>
+<nav class="crumb"><a href="../">← Autonomy Playground</a></nav>
+<h1>State Observer</h1>
+<div class="sub">A ball and beam held by a PD controller, simulated as in the video: the true ball runs the nonlinear
+model (g sin θ, the centrifugal term, the servo's lag and rate limit and its linkage) at 1 kHz, and the distance sensor
+measures p every Δt = 20 ms with noise σ. Three velocity estimates run side by side on the same measurements: the
+finite difference, the filtered derivative and the Luenberger observer on the linear model. Choose which one feeds
+the controller, drag the ▲ under the beam to move the desired position r, and press <em>start the observer in the wrong
+place</em> to watch it recover.</div>
+<div class="watch">▶ Video: <a href="https://youtu.be/101cJb9GJKM">State Observers Explained: Estimating Velocity on a
+Ball and Beam</a> · playlists <a href="https://www.youtube.com/playlist?list=PLfGhcnOuoBes">Kalman Filters</a>,
+<a href="https://www.youtube.com/playlist?list=PLaLSHgFFcrB4">Ball and Beam</a></div>
+
+<div class="app so">
+  <div class="panel view">
+    <canvas id="view" class="wide" aria-label="Side view of the ball and beam with the estimates"></canvas>
+    <div class="hint" id="hint">t = 0.0 s</div>
+  </div>
+
+  <div class="panel controls">
+    <div class="btns">
+      <button class="b" id="run">Pause</button>
+      <button class="b" id="reset">Reset</button>
+      <div class="seg" role="group" aria-label="Time scale" id="speed" style="flex:1">
+        <button data-v="0.25" aria-pressed="false">×¼</button>
+        <button data-v="0.5" aria-pressed="false">×½</button>
+        <button data-v="1" aria-pressed="true">×1</button>
+      </div>
+    </div>
+
+    <h2>Controller</h2>
+    <div class="row"><label>velocity fed to the PD</label></div>
+    <div class="seg three" role="group" aria-label="Velocity fed to the controller" id="feed">
+      <button data-v="fd" aria-pressed="false">finite difference</button>
+      <button data-v="hp" aria-pressed="false">filtered derivative</button>
+      <button data-v="obs" aria-pressed="true">observer</button>
+    </div>
+    <div class="row"><label>desired position r</label></div>
+    <div class="seg" role="group" aria-label="Desired position" id="refmode">
+      <button data-v="wander" aria-pressed="true">wander</button>
+      <button data-v="steps" aria-pressed="false">steps</button>
+      <button data-v="hold" aria-pressed="false">hold (drag ▲)</button>
+    </div>
+    <div class="eq">θ = −k<sub>p</sub> (p − r) − k<sub>d</sub> v, &nbsp;|θ| ≤ 9°<br>
+      k<sub>p</sub> = <span id="kpV"></span> rad/m, k<sub>d</sub> = <span id="kdV"></span> rad·s/m<br>
+      finite difference, filtered derivative: p = y; observer: p̂, v̂</div>
+
+    <h2>Sensor</h2>
+    <div class="row"><label for="sig"><span>sensor noise σ</span> <span class="v" id="sigV"></span></label>
+      <input type="range" id="sig" min="0" max="10" step="0.1" value="2.5"></div>
+
+    <h2>Filtered derivative</h2>
+    <div class="row"><label for="wc"><span>cut-off ω<sub>c</sub></span> <span class="v" id="wcV"></span></label>
+      <input type="range" id="wc" min="1" max="90" step="0.5" value="15"></div>
+    <div class="readout" id="wcR"></div>
+
+    <h2>Observer</h2>
+    <div class="row"><label for="l1"><span>l<sub>1</sub> (position gain)</span> <span class="v" id="l1V"></span></label>
+      <input type="range" id="l1" min="-1.7" max="0.4" step="0.005"></div>
+    <div class="row"><label for="l2"><span>l<sub>2</sub> (velocity gain)</span> <span class="v" id="l2V"></span></label>
+      <input type="range" id="l2" min="-1" max="2" step="0.005"></div>
+    <div class="btns" id="presets" role="group" aria-label="The video's gains">
+      <button class="b" data-a="1" data-b="1" title="the video's gains">video's L</button>
+      <button class="b" data-a="3" data-b="1">3 l<sub>1</sub></button>
+      <button class="b" data-a="0.3333333333" data-b="1">l<sub>1</sub>/3</button>
+      <button class="b" data-a="1" data-b="3">3 l<sub>2</sub></button>
+      <button class="b" data-a="1" data-b="0.3333333333">l<sub>2</sub>/3</button>
+    </div>
+    <label class="chk"><input type="checkbox" id="open"> observer open loop (L = 0, a simulator)</label>
+    <button class="b primary" id="wrong">Start the observer in the wrong place</button>
+    <div class="note">Offsets the observer's state by p̂ + 8 cm, v̂ − 0.10 m/s, as in the video's “choosing the gains”.</div>
+    <canvas id="eig" class="square eig" aria-label="Eigenvalues of A_d minus L C in the unit circle"></canvas>
+    <div class="readout" id="eigR"></div>
+    <div class="eq">x̂<sub>k+1</sub> = A<sub>d</sub> x̂<sub>k</sub> + B<sub>d</sub> θ<sub>k</sub> + L (y<sub>k</sub> − C x̂<sub>k</sub>)<br>
+      p̂<sub>k+1</sub> = p̂<sub>k</sub> + Δt v̂<sub>k</sub> + l<sub>1</sub> (y<sub>k</sub> − p̂<sub>k</sub>)<br>
+      v̂<sub>k+1</sub> = v̂<sub>k</sub> + Δt b θ<sub>k</sub> + l<sub>2</sub> (y<sub>k</sub> − p̂<sub>k</sub>)<br>
+      e<sub>k+1</sub> = (A<sub>d</sub> − LC) e<sub>k</sub>, &nbsp;A<sub>d</sub> − LC = [1 − l<sub>1</sub>, Δt; −l<sub>2</sub>, 1]<br>
+      b = 5/7 g = <span id="bV"></span> m/s² per rad, Δt = 0.02 s</div>
+  </div>
+  <div class="charts">
+    <div class="panel strip">
+      <h3><span>Velocity v [m/s], last 10 s: <span class="c-truth">true v</span> and</span>
+        <span class="shows">
+          <label class="c-alt2"><input type="checkbox" id="showFd" checked> finite difference</label>
+          <label class="c-alt"><input type="checkbox" id="showHp" checked> filtered derivative</label>
+          <label class="c-est"><input type="checkbox" id="showObs" checked> observer v̂</label>
+        </span></h3>
+      <canvas id="chV" class="chart" aria-label="Velocity: true and estimated"></canvas>
+    </div>
+    <div class="panel strip">
+      <h3><span>Position p from the sensor [m]: <span class="c-truth">true p</span>, <span class="c-meas">measured y</span>,
+        <span class="c-est">observer p̂</span>, <span class="c-alt3">desired r</span></span></h3>
+      <canvas id="chP" class="chart" aria-label="Position: true, measured and estimated"></canvas>
+    </div>
+  </div>
+</div>
+<div class="grid2">
+  <div class="panel strip">
+    <h3><span>Beam angle [deg]: <span class="c-truth">θ, the servo's tilt</span>, and <span id="cmdLab">the PD's command</span>
+      (dashed: the ±9° limit)</span></h3>
+    <canvas id="chT" class="chart" aria-label="Beam angle and command"></canvas>
+  </div>
+  <div class="panel tablebox">
+    <h3>How good is each estimate? (last 8 s, against the true ball)</h3>
+    <table aria-label="Estimator errors">
+      <thead><tr><th>estimate</th><th>v error, rms [m/s]</th><th>lag [ms]</th><th>p error, rms [mm]</th></tr></thead>
+      <tbody>
+        <tr><td class="c-alt2">finite difference</td><td id="fd0"></td><td id="fd1"></td><td id="fd2"></td></tr>
+        <tr><td class="c-alt" id="hpName">filtered derivative</td><td id="hp0"></td><td id="hp1"></td><td id="hp2"></td></tr>
+        <tr><td class="c-est">observer</td><td id="ob0"></td><td id="ob1"></td><td id="ob2"></td></tr>
+      </tbody>
+    </table>
+    <div class="note" id="loopR"></div>
+    <div class="note">The lag is the delay (in whole samples) that best lines the estimate up with the true velocity; the
+      finite difference and the filtered derivative use the measurement as their position, so their position error is
+      the sensor's.</div>
+  </div>
+</div>
+
+<div class="panel tryit">
+  <h2>Things to try</h2>
+  <ul>
+    <li>Feed the PD with the <b>finite difference</b>, then the <b>filtered derivative</b>, then the <b>observer</b>, and
+      watch the beam and the beam jitter under the table: the finite difference makes the beam shake, the filtered
+      derivative still makes it jitter, and with the observer the motion is smooth.</li>
+    <li>Slide the cut-off ω<sub>c</sub> from 5 to 40 rad/s and read the table: a high cut-off follows the true velocity
+      with little lag but lets the noise through; a low one is smooth but lags (about 1/ω<sub>c</sub>). Then double σ:
+      the finite difference's error doubles with it (√2 σ/Δt).</li>
+    <li>Press <b>start the observer in the wrong place</b> with the video's L, then with 3 l<sub>1</sub> and
+      l<sub>1</sub>/3, then 3 l<sub>2</sub> and l<sub>2</sub>/3. A larger l<sub>1</sub> snaps p̂ onto the noisy
+      measurements; a smaller one makes both estimates oscillate. A larger l<sub>2</sub> overshoots and is noisier; a
+      smaller one is smooth but slow to recover.</li>
+    <li>Feed the PD with the filtered derivative, tick <b>observer open loop</b> and start it in the wrong place: the
+      simulator's error never dies out, it grows, because the ball and beam is unstable on its own (both eigenvalues of
+      A<sub>d</sub> sit on the circle, at 1). Untick it and the feedback pulls the estimate back.</li>
+    <li>Drag l<sub>2</sub> up past l<sub>1</sub>/Δt (or l<sub>1</sub> towards 2.5): when an eigenvalue of
+      A<sub>d</sub> − LC leaves the unit circle the estimate blows up, and a PD fed by it loses the ball.</li>
+  </ul>
+</div>
+
+<footer>Video: <a href="https://youtu.be/101cJb9GJKM">State Observers Explained: Estimating Velocity on a Ball and Beam</a>,
+  and next, <a href="https://youtu.be/K1OMj2yAJLA">The Kalman Filter Explained with a Ball and Beam</a>; more in the playlists
+  <a href="https://www.youtube.com/playlist?list=PLfGhcnOuoBes">Kalman Filters</a> and <a href="https://www.youtube.com/playlist?list=PLaLSHgFFcrB4">Ball and Beam</a>. The model's
+  numbers are the video's own. Source: <a href="https://github.com/erlendcoates/autonomy-playground">github.com/erlendcoates/autonomy-playground</a>.</footer>
+
+<script type="module">
+import {Plot, css} from "../common/plot.js";
+
+// ── the rig, as ballbeam.py builds it (rig coordinates: x from the pivot, theta > 0 the right end down) ──────────
+const G = 9.81, B = 5 / 7 * G;
+const R_BALL = 0.02, BEAM_L = 1.0, H_PIVOT = 0.20, D_ATT = 0.15, H_ATT = 0.025, R_HORN = 0.03, L_ROD = 0.10;
+const SERVO_RATE = (60 * Math.PI / 180) / 0.17, SERVO_TAU = 0.02, PHI_MAX = 75 * Math.PI / 180;
+const P_END = 0.5 * BEAM_L - R_BALL - 0.035, SENSOR_X = 0.5 * BEAM_L - 0.03;
+const S_SERVO = [-D_ATT - R_HORN, H_PIVOT - H_ATT - L_ROD];
+const FLOOR_Y = 0.012;
+
+function attach(th) { const c = Math.cos(th), s = Math.sin(th); return [-D_ATT * c - H_ATT * s, H_PIVOT + D_ATT * s - H_ATT * c]; }
+function hornTip(phi) { return [S_SERVO[0] + R_HORN * Math.cos(phi), S_SERVO[1] + R_HORN * Math.sin(phi)]; }
+
+const LINK = (() => {   // theta(phi) by the rod's length, tabulated over the horn's travel (ballbeam.Linkage)
+  const n = 641, phi = new Float64Array(n), th = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    phi[i] = -PHI_MAX + 2 * PHI_MAX * i / (n - 1);
+    const T = hornTip(phi[i]);
+    let lo = -0.35, hi = 0.35;
+    for (let k = 0; k < 60; k++) {
+      const mid = 0.5 * (lo + hi), E = attach(mid);
+      if (Math.hypot(E[0] - T[0], E[1] - T[1]) - L_ROD > 0) hi = mid; else lo = mid;
+    }
+    th[i] = 0.5 * (lo + hi);
+  }
+  return {phi, th};
+})();
+function interp(x, xs, ys) {   // np.interp: linear, held at the ends
+  const n = xs.length;
+  if (x <= xs[0]) return ys[0];
+  if (x >= xs[n - 1]) return ys[n - 1];
+  let a = 0, b = n - 1;
+  while (b - a > 1) { const m = (a + b) >> 1; if (xs[m] <= x) a = m; else b = m; }
+  return ys[a] + (ys[b] - ys[a]) * (x - xs[a]) / (xs[b] - xs[a]);
+}
+const fk = (phi) => interp(phi, LINK.phi, LINK.th), ik = (th) => interp(th, LINK.th, LINK.phi);
+
+class RigSim {           // ballbeam.RigSim: the servo's horn, the linkage, the ball, at 1 kHz, the centrifugal term on
+  constructor(p0) { this.p = p0; this.v = 0; this.phi = 0; this.theta = 0; this.phiCmd = 0; }
+  command(thetaCmd, thMax) { this.phiCmd = ik(Math.max(-thMax, Math.min(thMax, thetaCmd))); }
+  advance(dt) {
+    const n = Math.max(1, Math.round(dt / 0.001)), h = dt / n;
+    for (let i = 0; i < n; i++) {
+      const want = (this.phiCmd - this.phi) * h / SERVO_TAU;
+      this.phi += Math.max(-SERVO_RATE * h, Math.min(SERVO_RATE * h, want));
+      const th0 = this.theta;
+      this.theta = fk(this.phi);
+      const thd = (this.theta - th0) / h;
+      const a = B * Math.sin(this.theta) + 5 / 7 * this.p * thd * thd;
+      this.p += this.v * h + 0.5 * a * h * h;
+      this.v += a * h;
+      if (Math.abs(this.p) > P_END) { this.p = Math.sign(this.p) * P_END; this.v = 0; }
+    }
+  }
+}
+
+// ── the film's loop (state_observer.py; film coordinates: p from the sensor, theta > 0 raising the sensor's end) ──
+const DT = 0.02, SENSOR = SENSOR_X, R_HOME = SENSOR;
+const THETA_CMD_MAX = 9 * Math.PI / 180;
+const W_CTRL = 2.4, Z_CTRL = 0.8, KP = W_CTRL ** 2 / B, KD = 2 * Z_CTRL * W_CTRL / B;
+function gainFromPair(w, zeta) {   // the film's L: the discrete images of a continuous pair (w, zeta)
+  const re = -zeta * w * DT, im = w * Math.sqrt(1 - zeta * zeta) * DT, m = Math.exp(re);
+  const zr = m * Math.cos(im);
+  const l1 = 2 - 2 * zr, l2 = (m * m - 1 + l1) / DT;
+  return [l1, l2];
+}
+const L_OBS = gainFromPair(10.0, 0.7);
+const OFF_G = [0.08, -0.10];
+const WIN = 10, NBUF = Math.round(WIN / DT) + 1, NSTAT = Math.round(8 / DT);
+
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function gaussFrom(rnd) { let spare = null; return () => { if (spare !== null) { const s = spare; spare = null; return s; } let u = 0; while (u === 0) u = rnd(); const v = rnd(), r = Math.sqrt(-2 * Math.log(u)); spare = r * Math.sin(2 * Math.PI * v); return r * Math.cos(2 * Math.PI * v); }; }
+
+const $ = (id) => document.getElementById(id);
+const ui = {
+  feed: "obs", ref: "wander", speed: 1, running: true, open: false,
+  sig: 0.0025, wc: 15, l1: L_OBS[0], l2: L_OBS[1], rHold: R_HOME,
+  show: {fd: true, hp: true, obs: true},
+};
+const K = ["t", "p", "v", "th", "y", "fd", "hp", "ph", "vh", "r", "cmd"];
+let S;
+function reset() {
+  S = {rig: new RigSim(SENSOR - R_HOME), xh: [R_HOME, 0], z: null, yPrev: null, t: 0,
+       gauss: gaussFrom(mulberry32(20261020)), buf: Object.fromEntries(K.map((k) => [k, []])), events: [],
+       last: null, diverged: false, statsAge: 1e9};
+}
+const smoother = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * x * (x * (6 * x - 15) + 10); };
+function reference(t) {
+  if (ui.ref === "hold") return ui.rHold;
+  if (ui.ref === "steps") return R_HOME + (Math.floor(t / 4) % 2 === 0 ? -0.15 : 0.15);   // the film's loop beat
+  const w = smoother(t / 3);                                                                // the film's wander
+  return R_HOME + w * (0.17 * Math.sin(0.75 * t) + 0.06 * Math.sin(1.9 * t + 0.5));
+}
+
+function step() {
+  const rig = S.rig;
+  const p = SENSOR - rig.p, v = -rig.v, th = -rig.theta;
+  const y = p + ui.sig * S.gauss();
+  const fd = S.yPrev === null ? 0 : (y - S.yPrev) / DT;
+  S.yPrev = y;
+  if (S.z === null) S.z = y;
+  const vhp = ui.wc * (y - S.z);                  // filtered_derivative, as the film writes it
+  S.z = S.z + DT * vhp;
+  const u = th;                                   // the tilt the servo holds: every observer's input
+  const r = reference(S.t);
+  const [pc, vc] = ui.feed === "fd" ? [y, fd] : ui.feed === "hp" ? [y, vhp] : [S.xh[0], S.xh[1]];
+  const cmd = Math.max(-THETA_CMD_MAX, Math.min(THETA_CMD_MAX, -KP * (pc - r) - KD * vc));
+  const rec = {t: S.t, p, v, th, y, fd, hp: vhp, ph: S.xh[0], vh: S.xh[1], r, cmd};
+  for (const k of K) { const b = S.buf[k]; b.push(rec[k]); if (b.length > NBUF) b.shift(); }
+  S.last = rec;
+  rig.command(-cmd, THETA_CMD_MAX);
+  const L = ui.open ? [0, 0] : [ui.l1, ui.l2], e = y - S.xh[0];
+  let p1 = S.xh[0] + DT * S.xh[1] + L[0] * e, v1 = S.xh[1] + DT * B * u + L[1] * e;   // observer_step
+  if (!(Math.abs(p1) < 20 && Math.abs(v1) < 200)) {                                   // keep a diverging estimate finite
+    S.diverged = true; S.divergedAt = S.t;
+    p1 = Number.isFinite(p1) ? Math.max(-20, Math.min(20, p1)) : 0;
+    v1 = Number.isFinite(v1) ? Math.max(-200, Math.min(200, v1)) : 0;
+  }
+  S.xh = [p1, v1];
+  rig.advance(DT);
+  S.t += DT;
+  S.statsAge++;
+}
+
+// ── statistics over the last 8 s (the film's report: rms against the truth, lag by the best whole-sample shift) ──
+function stats() {
+  const b = S.buf, n = Math.min(NSTAT, b.t.length), o = b.t.length - n;
+  if (n < 50) return null;
+  const sl = (k) => b[k].slice(o);
+  const v = sl("v"), p = sl("p");
+  const rms = (e, ref) => Math.sqrt(e.reduce((s, x, i) => s + (x - ref[i]) ** 2, 0) / e.length);
+  const lag = (e) => {
+    let best = 0, bv = Infinity;
+    for (let L = 0; L < 40 && L < n - 10; L++) {
+      let s = 0;
+      for (let i = L; i < n; i++) s += (e[i] - v[i - L]) ** 2;
+      s /= (n - L);
+      if (s < bv) { bv = s; best = L; }
+    }
+    return best * DT * 1000;
+  };
+  const out = {};
+  for (const [k, vk, pk] of [["fd", "fd", "y"], ["hp", "hp", "y"], ["obs", "vh", "ph"]]) {
+    const e = sl(vk);
+    out[k] = [rms(e, v), lag(e), rms(sl(pk), p) * 1000];
+  }
+  const th = sl("th");
+  let j = 0;
+  for (let i = 1; i < n; i++) j += (th[i] - th[i - 1]) ** 2;
+  out.jitter = Math.sqrt(j / (n - 1)) * 180 / Math.PI;
+  out.track = rms(p, sl("r")) * 100;
+  out.vrms = Math.sqrt(v.reduce((s, x) => s + x * x, 0) / n);
+  out.secs = n * DT;
+  return out;
+}
+const fmt = (x, d) => Number.isFinite(x) ? x.toFixed(d).replace("-", "−") : "—";
+function updateTable() {
+  const s = stats();
+  for (const [k, id] of [["fd", "fd"], ["hp", "hp"], ["obs", "ob"]]) {
+    const r = s ? s[k] : [NaN, NaN, NaN];
+    const big = k === "obs" && ((S.diverged && S.t - S.divergedAt < 8) || r[0] > 5);
+    $(id + "0").textContent = big ? "diverged" : fmt(r[0], r[0] < 0.1 ? 4 : 3);
+    $(id + "1").textContent = big ? "—" : fmt(r[1], 0);
+    $(id + "2").textContent = big ? "—" : fmt(r[2], 2);
+    $(id + "0").parentElement.querySelectorAll("td")[0].classList.toggle("feed", ui.feed === k);
+  }
+  $("hpName").innerHTML = `filtered derivative (ω<sub>c</sub> = ${fmt(ui.wc, ui.wc % 1 ? 1 : 0)})`;
+  const name = {fd: "the finite difference", hp: "the filtered derivative", obs: "the observer"}[ui.feed];
+  $("loopR").innerHTML = s ? `With the PD fed by <b>${name}</b>: beam jitter (rms change of θ per sample)
+    <b>${fmt(s.jitter, 3)}°</b>, tracking |p − r| rms <b>${fmt(s.track, 1)} cm</b>, the true ball's speed rms
+    <b>${fmt(s.vrms, 3)} m/s</b> (over ${fmt(s.secs, 1)} s).` : "Collecting the first seconds…";
+}
+
+// ── the side view ───────────────────────────────────────────────────────────────────────────────────────────────
+const view = $("view");
+let VT = null;   // the view's transform
+function colors() {
+  return Object.fromEntries(["truth", "meas", "est", "alt", "alt2", "alt3", "muted", "line", "grid", "panel", "fg", "bg", "bad"].map((k) => [k, css("--" + k)]));
+}
+function drawView() {
+  const c = view, dpr = window.devicePixelRatio || 1, W = c.clientWidth, Hh = c.clientHeight;
+  if (!W || !Hh) return;
+  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(Hh * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(Hh * dpr); }
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, Hh);
+  const C = colors(), sans = css("--sans"), mono = css("--mono");
+  const narrow = W < 520, rh = Math.max(15, Math.min(22, Hh * 0.045)), gy0 = 12, gh = gy0 + 4 * rh + 56 + (narrow ? 18 : 0);
+  const s = Math.min(W / 1.16, (Hh - 34 - gh - 10) / 0.37), by = Math.min(Hh - 34, gh + 30 + 0.37 * s), cx = W / 2;
+  VT = {s, cx, by};
+  const X = (x) => cx + x * s, Y = (y) => by - y * s;
+  const last = S.last || {p: SENSOR - S.rig.p, v: -S.rig.v, th: -S.rig.theta, y: NaN, fd: 0, hp: 0, ph: S.xh[0], vh: S.xh[1], r: reference(S.t), cmd: 0};
+  const thR = S.rig.theta, pR = S.rig.p;          // the truth now, in rig coordinates
+  const ct = Math.cos(thR), st = Math.sin(thR);
+  const bw = (p, dy) => { const yy = FLOOR_Y + dy; return [X(p * ct + yy * st), Y(H_PIVOT - p * st + yy * ct)]; };
+  const poly = (pts, fill, stroke, lw = 1) => { g.beginPath(); pts.forEach(([a, b], i) => i ? g.lineTo(a, b) : g.moveTo(a, b)); g.closePath(); if (fill) { g.fillStyle = fill; g.fill(); } if (stroke) { g.strokeStyle = stroke; g.lineWidth = lw; g.stroke(); } };
+  const rect = (x0, x1, d0, d1) => [bw(x0, d0), bw(x1, d0), bw(x1, d1), bw(x0, d1)];
+
+  // base, post, servo
+  g.fillStyle = C.line; g.fillRect(X(-0.43), Y(0.012), 0.86 * s, 0.012 * s);
+  g.fillStyle = C.muted; g.globalAlpha = 0.55; g.fillRect(X(-0.015), Y(H_PIVOT - 0.02), 0.03 * s, (H_PIVOT - 0.032) * s); g.globalAlpha = 1;
+  g.fillStyle = C.truth; g.globalAlpha = 0.85;
+  g.fillRect(X(S_SERVO[0] - 0.03), Y(S_SERVO[1] + 0.01), 0.041 * s, 0.02 * s);
+  g.globalAlpha = 0.4; g.fillRect(X(S_SERVO[0] - 0.03), Y(S_SERVO[1] - 0.01), 0.041 * s, (S_SERVO[1] - 0.022) * s); g.globalAlpha = 1;
+  // horn and pushrod, from the linkage
+  const tip = hornTip(S.rig.phi), pin = attach(thR);
+  g.strokeStyle = C.muted; g.lineWidth = Math.max(2, 0.005 * s); g.lineCap = "round";
+  g.beginPath(); g.moveTo(X(S_SERVO[0]), Y(S_SERVO[1])); g.lineTo(X(tip[0]), Y(tip[1])); g.stroke();
+  g.lineWidth = Math.max(1.5, 0.003 * s);
+  g.beginPath(); g.moveTo(X(tip[0]), Y(tip[1])); g.lineTo(X(pin[0]), Y(pin[1])); g.stroke();
+  const clev = bw(-D_ATT, -0.004);
+  g.beginPath(); g.moveTo(X(pin[0]), Y(pin[1])); g.lineTo(clev[0], clev[1]); g.stroke();
+  g.fillStyle = C.muted;
+  for (const q of [tip, pin]) { g.beginPath(); g.arc(X(q[0]), Y(q[1]), Math.max(2.5, 0.004 * s), 0, 2 * Math.PI); g.fill(); }
+  g.fillStyle = C.panel; g.beginPath(); g.arc(X(S_SERVO[0]), Y(S_SERVO[1]), Math.max(2.5, 0.0055 * s), 0, 2 * Math.PI); g.fill();
+  g.font = `11px ${sans}`; g.fillStyle = C.muted; g.textAlign = "center"; g.textBaseline = "top";
+  g.fillText("servo", X(S_SERVO[0] - 0.0095), Y(S_SERVO[1] - 0.012) + 2);
+
+  // the channel's back wall, the floor
+  poly(rect(-0.5, 0.5, 0, 0.026), C.grid, null);
+  poly(rect(-0.5, 0.5, -0.004, 0), C.muted, null);
+  poly(rect(-0.5, -0.492, 0, 0.03), C.truth, null);                       // the stop
+  // the reference r: a marker under the beam (drag it)
+  const rR = SENSOR - last.r, mk = bw(rR, -0.012), mw = 0.011 * s;
+  g.fillStyle = C.alt3;
+  g.beginPath(); g.moveTo(mk[0], mk[1] - 0.6 * mw); g.lineTo(mk[0] - mw, mk[1] + 1.1 * mw); g.lineTo(mk[0] + mw, mk[1] + 1.1 * mw); g.closePath(); g.fill();
+  g.font = `italic 12px ${sans}`; g.textBaseline = "top"; g.fillText("r", mk[0], mk[1] + 1.3 * mw);
+
+  // the sensor's ray and the measurements (the last few, fading)
+  const sens = bw(SENSOR_X, 0.02), ballEdge = bw(pR + R_BALL, 0.02);
+  g.strokeStyle = C.meas; g.globalAlpha = 0.45; g.lineWidth = 1.5; g.setLineDash([4, 3]);
+  g.beginPath(); g.moveTo(sens[0], sens[1]); g.lineTo(ballEdge[0], ballEdge[1]); g.stroke(); g.setLineDash([]); g.globalAlpha = 1;
+  const ys = S.buf.y, nm = Math.min(12, ys.length);
+  for (let i = 0; i < nm; i++) {
+    const yv = ys[ys.length - nm + i], a = (i + 1) / nm;
+    const q0 = bw(SENSOR - yv, 2 * R_BALL + 0.004), q1 = bw(SENSOR - yv, 2 * R_BALL + 0.016);
+    g.strokeStyle = C.meas; g.globalAlpha = 0.15 + 0.85 * a * a; g.lineWidth = i === nm - 1 ? 2.5 : 1.5;
+    g.beginPath(); g.moveTo(q0[0], q0[1]); g.lineTo(q1[0], q1[1]); g.stroke();
+  }
+  g.globalAlpha = 1;
+  // the ball
+  const bc = bw(pR, R_BALL), rb = R_BALL * s;
+  g.fillStyle = C.truth; g.beginPath(); g.arc(bc[0], bc[1], rb, 0, 2 * Math.PI); g.fill();
+  const spin = -pR / R_BALL - thR;
+  g.strokeStyle = C.panel; g.lineWidth = Math.max(1, 0.12 * rb); g.globalAlpha = 0.7;
+  g.beginPath(); g.moveTo(bc[0] - rb * 0.75 * Math.cos(spin), bc[1] - rb * 0.75 * Math.sin(spin)); g.lineTo(bc[0] + rb * 0.75 * Math.cos(spin), bc[1] + rb * 0.75 * Math.sin(spin)); g.stroke();
+  g.globalAlpha = 1;
+  // the observer's ghost
+  const ghR = SENSOR - Math.max(-0.2, Math.min(1.2, S.xh[0])), gc = bw(ghR, R_BALL);
+  g.fillStyle = C.est; g.globalAlpha = 0.22; g.beginPath(); g.arc(gc[0], gc[1], rb * 1.06, 0, 2 * Math.PI); g.fill();
+  g.globalAlpha = 1; g.strokeStyle = C.est; g.lineWidth = 2; g.setLineDash([4, 3]);
+  g.beginPath(); g.arc(gc[0], gc[1], rb * 1.06, 0, 2 * Math.PI); g.stroke(); g.setLineDash([]);
+  // the channel's front wall, see-through; the sensor at the right end; the hub
+  poly(rect(-0.5, 0.5, 0, 0.026), null, C.muted, 1);
+  g.globalAlpha = 0.18; poly(rect(-0.5, 0.5, 0.0, 0.012), C.muted, null); g.globalAlpha = 1;
+  poly(rect(SENSOR_X, 0.5, 0.006, 0.034), C.truth, null);
+  const ap = bw(SENSOR_X, 0.02); g.fillStyle = C.meas; g.beginPath(); g.arc(ap[0], ap[1], Math.max(2, 0.003 * s), 0, 2 * Math.PI); g.fill();
+  g.fillStyle = C.truth; g.beginPath(); g.arc(X(0), Y(H_PIVOT), Math.max(3, 0.008 * s), 0, 2 * Math.PI); g.fill();
+  g.fillStyle = C.panel; g.beginPath(); g.arc(X(0), Y(H_PIVOT), Math.max(1.5, 0.003 * s), 0, 2 * Math.PI); g.fill();
+  // labels: the sensor, theta, p
+  g.font = `12px ${sans}`; g.fillStyle = C.meas; g.textAlign = "right"; g.textBaseline = "top";
+  const sl = bw(0.5, -0.012);
+  g.save(); g.translate(sl[0], sl[1]); g.rotate(thR); g.fillText("distance sensor", 0, 4); g.restore();
+  g.fillStyle = C.muted; g.textAlign = "left"; g.textBaseline = "top"; g.font = `12px ${mono}`;
+  // p dimension: from the sensor to the ball's centre, over the beam
+  const d0 = bw(SENSOR_X, 0.075), d1 = bw(pR, 0.075);
+  g.strokeStyle = C.truth; g.globalAlpha = 0.6; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(d0[0], d0[1]); g.lineTo(d1[0], d1[1]); g.stroke();
+  for (const q of [d0, d1]) { g.beginPath(); g.moveTo(q[0], q[1] - 4); g.lineTo(q[0], q[1] + 4); g.stroke(); }
+  g.globalAlpha = 1; g.fillStyle = C.truth; g.textAlign = "center"; g.textBaseline = "bottom";
+  g.fillText(`p = ${fmt(last.p, 3)} m`, 0.5 * (d0[0] + d1[0]), Math.min(d0[1], d1[1]) - 3);
+
+  // the velocity gauge: each estimate against the truth, the one feeding the PD marked
+  const rows = [["true v", last.v, C.truth, null], [narrow ? "finite diff." : "finite difference", last.fd, C.alt2, "fd"],
+    [narrow ? "filtered" : "filtered derivative", last.hp, C.alt, "hp"], ["observer v̂", last.vh, C.est, "obs"]];
+  const gx0 = Math.min(160, 0.3 * W), gx1 = W - 70, gmid = 0.5 * (gx0 + gx1), half = 0.5 * (gx1 - gx0), VMAX = 0.6;
+  g.font = `11px ${mono}`; g.fillStyle = C.muted; g.textAlign = "center"; g.textBaseline = "top";
+  g.strokeStyle = C.grid; g.lineWidth = 1;
+  for (const tv of [-0.6, -0.3, 0, 0.3, 0.6]) {
+    const px = gmid + tv / VMAX * half;
+    g.beginPath(); g.moveTo(px + 0.5, gy0); g.lineTo(px + 0.5, gy0 + rows.length * rh); g.stroke();
+    g.fillText(fmt(tv, 1), px, gy0 + rows.length * rh + 2);
+  }
+  g.fillText("v [m/s]  (toward the sensor −, away +)", gmid, gy0 + rows.length * rh + 15);
+  rows.forEach(([lab, val, col, key], i) => {
+    const yy = gy0 + i * rh + rh / 2, cl = Math.max(-VMAX, Math.min(VMAX, val)), px = gmid + cl / VMAX * half;
+    g.fillStyle = col; g.globalAlpha = 0.85;
+    g.fillRect(Math.min(gmid, px), yy - rh * 0.3, Math.abs(px - gmid), rh * 0.6);
+    if (Math.abs(val) > VMAX) { const sg = Math.sign(val); g.beginPath(); g.moveTo(px + sg * 7, yy); g.lineTo(px, yy - rh * 0.35); g.lineTo(px, yy + rh * 0.35); g.fill(); }
+    g.globalAlpha = 1;
+    const feeds = key && key === ui.feed;
+    g.font = `${feeds ? 600 : 400} 12px ${sans}`; g.textAlign = "right"; g.textBaseline = "middle"; g.fillStyle = col;
+    g.fillText((feeds ? "PD ◂ " : "") + lab, gx0 - 8, yy);
+    g.font = `12px ${mono}`; g.textAlign = "left"; g.fillStyle = C.muted;
+    g.fillText(fmt(val, 3), gx1 + 6, yy);
+  });
+  const tv = gmid + Math.max(-VMAX, Math.min(VMAX, last.v)) / VMAX * half;
+  g.strokeStyle = C.truth; g.lineWidth = 1.5; g.setLineDash([3, 3]);
+  g.beginPath(); g.moveTo(tv, gy0); g.lineTo(tv, gy0 + rows.length * rh); g.stroke(); g.setLineDash([]);
+
+  // a key for the beam
+  g.font = `12px ${sans}`; g.textAlign = "left"; g.textBaseline = "middle";
+  const ky = gy0 + rows.length * rh + 40;
+  let kx = 12, kyy = ky;
+  for (const [lab, col, kind] of [["true ball", C.truth, "ball"], ["observer p̂", C.est, "ghost"], ["measured y", C.meas, "tick"], ["desired r", C.alt3, "tri"]]) {
+    if (kx + 28 + g.measureText(lab).width > W - 4) { kx = 12; kyy += 18; }
+    const ky = kyy;
+    g.fillStyle = g.strokeStyle = col;
+    if (kind === "ball") { g.beginPath(); g.arc(kx + 6, ky, 5, 0, 2 * Math.PI); g.fill(); }
+    else if (kind === "ghost") { g.lineWidth = 1.5; g.setLineDash([3, 2]); g.beginPath(); g.arc(kx + 6, ky, 5, 0, 2 * Math.PI); g.stroke(); g.setLineDash([]); }
+    else if (kind === "tick") { g.lineWidth = 2.5; g.beginPath(); g.moveTo(kx + 6, ky - 6); g.lineTo(kx + 6, ky + 6); g.stroke(); }
+    else { g.beginPath(); g.moveTo(kx + 6, ky - 5); g.lineTo(kx, ky + 5); g.lineTo(kx + 12, ky + 5); g.closePath(); g.fill(); }
+    g.fillStyle = C.fg; g.fillText(lab, kx + 16, ky);
+    kx += 22 + g.measureText(lab).width + 12;
+  }
+  $("hint").textContent = `t = ${fmt(S.t, 1)} s · θ = ${fmt(last.th * 180 / Math.PI, 1)}° · drag under the beam to move r` + (ui.running ? "" : " · paused");
+}
+
+// dragging r along the beam
+let dragging = false;
+function setRFromEvent(ev) {
+  if (!VT) return;
+  const rc = view.getBoundingClientRect(), x = ev.clientX - rc.left;
+  const xr = (x - VT.cx) / VT.s / Math.cos(S.rig.theta);
+  ui.rHold = Math.max(SENSOR - 0.36, Math.min(SENSOR + 0.36, SENSOR - xr));
+  if (ui.ref !== "hold") { ui.ref = "hold"; segSet("refmode", "hold"); }
+  if (!ui.running) drawView();
+}
+view.addEventListener("pointerdown", (ev) => {
+  if (!VT) return;
+  const rc = view.getBoundingClientRect(), y = ev.clientY - rc.top;
+  if (y < VT.by - (H_PIVOT + 0.12) * VT.s) return;   // the gauge above is not for dragging
+  dragging = true; view.setPointerCapture(ev.pointerId); setRFromEvent(ev);
+});
+view.addEventListener("pointermove", (ev) => { if (dragging) setRFromEvent(ev); });
+view.addEventListener("pointerup", () => { dragging = false; });
+view.addEventListener("pointercancel", () => { dragging = false; });
+
+// ── the strip charts ───────────────────────────────────────────────────────────────────────────────────────────
+const pV = new Plot($("chV"), {xLabel: "t (s)", yLabel: "v (m/s)", legend: false});
+const pP = new Plot($("chP"), {xLabel: "t (s)", yLabel: "p (m)", legend: false});
+const pT = new Plot($("chT"), {xLabel: "t (s)", yLabel: "θ (deg)", legend: false});
+const FEEDCOL = {fd: "--alt2", hp: "--alt", obs: "--est"};
+function mark(e) {   // an event line on the strips; events at the same moment share one line
+  const last = S.events[S.events.length - 1];
+  if (last && Math.abs(last.t - e.t) < 0.3) last.label += " · " + e.label; else S.events.push(e);
+}
+function vlinesNow(xa) {
+  return S.events.filter((e) => e.t >= xa).map((e) => ({x: e.t, color: "--muted", label: e.label}));
+}
+function drawCharts() {
+  const b = S.buf, t = b.t, t1 = Math.max(WIN, S.t), xr = [t1 - WIN, t1];
+  // velocity: the range from the truth (the finite difference may run off it)
+  let vm = 0.25;
+  for (const x of b.v) vm = Math.max(vm, Math.abs(x) * 1.5 + 0.08);
+  vm = Math.min(vm, 1.5);
+  const sV = [];
+  if (ui.show.fd) sV.push({x: t, y: b.fd, color: "--alt2", width: 1, alpha: 0.75, label: "finite difference"});
+  if (ui.show.hp) sV.push({x: t, y: b.hp, color: "--alt", width: 1.5, label: "filtered derivative"});
+  sV.push({x: t, y: b.v, color: "--truth", width: 2.2, label: "true v"});
+  if (ui.show.obs) sV.push({x: t, y: b.vh, color: "--est", width: 1.8, label: "observer v̂"});
+  pV.draw({series: sV, xRange: xr, yRange: [-vm, vm], vlines: vlinesNow(xr[0]), hlines: [{y: 0, color: "--line", dash: [], inRange: false}]});
+  // position
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < t.length; i++) for (const x of [b.p[i], b.r[i]]) { if (x < lo) lo = x; if (x > hi) hi = x; }
+  if (!Number.isFinite(lo)) { lo = R_HOME - 0.1; hi = R_HOME + 0.1; }
+  const pad = Math.max(0.06, 0.15 * (hi - lo));
+  pP.draw({series: [{x: t, y: b.r, color: "--alt3", width: 1.2, dash: [5, 4], label: "desired r"},
+                    {x: t, y: b.p, color: "--truth", width: 2.2, label: "true p"},
+                    {x: t, y: b.ph, color: "--est", width: 1.8, label: "observer p̂"}],
+           points: [{x: t, y: b.y, color: "--meas", r: 1.4, label: "measured y", alpha: 0.6}],
+           xRange: xr, yRange: [Math.max(-0.1, lo - pad), Math.min(1.05, hi + pad)], vlines: vlinesNow(xr[0]),
+           extra: (g, P) => {   // the truth and the estimate again, over the measurements
+             for (const [k, col, w] of [["p", "--truth", 1.6], ["ph", "--est", 1.4]]) {
+               g.strokeStyle = css(col); g.lineWidth = w; g.beginPath();
+               b[k].forEach((v, i) => { const [x, y] = P(t[i], v); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+               g.stroke();
+             }
+           }});
+  // beam angle
+  $("cmdLab").className = "c-" + FEEDCOL[ui.feed].slice(2);
+  const d = 180 / Math.PI;
+  pT.draw({series: [{x: t, y: b.cmd.map((x) => x * d), color: FEEDCOL[ui.feed], width: 1.2, label: "command (PD)"},
+                    {x: t, y: b.th.map((x) => x * d), color: "--truth", width: 2, label: "θ, the servo's tilt"}],
+           hlines: [{y: 9, color: "--muted"}, {y: -9, color: "--muted"}],
+           xRange: xr, yRange: [-10.5, 10.5], vlines: vlinesNow(xr[0])});
+}
+
+// ── the eigenvalues of A_d − LC ────────────────────────────────────────────────────────────────────────────────
+const pE = new Plot($("eig"), {xLabel: "Re λ", yLabel: "Im λ", legend: false});
+function eigs(l1, l2) {
+  const tr = 2 - l1, det = 1 - l1 + l2 * DT, disc = tr * tr - 4 * det;
+  if (disc >= 0) { const q = Math.sqrt(disc); return [[(tr + q) / 2, 0], [(tr - q) / 2, 0]]; }
+  const q = Math.sqrt(-disc); return [[tr / 2, q / 2], [tr / 2, -q / 2]];
+}
+function drawEig() {
+  const L = ui.open ? [0, 0] : [ui.l1, ui.l2], ev = eigs(L[0], L[1]), ef = eigs(L_OBS[0], L_OBS[1]);
+  const mags = ev.map(([a, b]) => Math.hypot(a, b)), mx = Math.max(...mags);
+  const stable = mx < 1 - 1e-9, marginal = !stable && mx <= 1 + 1e-9;
+  const circ = Array.from({length: 181}, (_, i) => 2 * Math.PI * i / 180);
+  const R = 1.8;
+  pE.draw({series: [{x: circ.map(Math.cos), y: circ.map(Math.sin), color: "--muted", width: 1.2}],
+           xRange: [-R, R], yRange: [-R, R], pad: {l: 40, r: 12, t: 12, b: 40},
+           hlines: [{y: 0, color: "--line", dash: []}], vlines: [{x: 0, color: "--line", dash: []}],
+           extra: (g, P) => {
+             g.font = `11px ${css("--sans")}`;
+             g.strokeStyle = css("--muted"); g.lineWidth = 1.5;
+             for (const [a, b] of ef) { const [x, y] = P(a, b); g.beginPath(); g.arc(x, y, 5, 0, 2 * Math.PI); g.stroke(); }
+             const col = css(stable ? "--est" : "--bad");
+             g.fillStyle = col; g.strokeStyle = col;
+             for (const [a, b] of ev) {
+               const ca = Math.max(-R * 0.97, Math.min(R * 0.97, a)), cb = Math.max(-R * 0.97, Math.min(R * 0.97, b));
+               const [x, y] = P(ca, cb);
+               g.beginPath(); g.moveTo(x - 5, y - 5); g.lineTo(x + 5, y + 5); g.moveTo(x + 5, y - 5); g.lineTo(x - 5, y + 5); g.lineWidth = 2.5; g.stroke();
+             }
+             g.fillStyle = css("--muted"); g.textAlign = "left"; g.textBaseline = "top";
+             const [x0, y0] = P(-R, R);
+             g.fillText("○ the video's L   × now", x0 + 6, y0 + 4);
+           }});
+  const fmtL = ([a, b]) => b === 0 ? fmt(a, 3) : `${fmt(a, 3)} ${b < 0 ? "−" : "+"} ${fmt(Math.abs(b), 3)}i`;
+  let verdict;
+  if (stable) {
+    const n = Math.log(0.5) / Math.log(mx);
+    verdict = `<span class="pill ok">stable</span> an error shrinks by |λ| each step: it halves in ${fmt(n, 1)} steps, ${fmt(n * DT, 2)} s`;
+  } else if (marginal) {
+    verdict = ui.open || (L[0] === 0 && L[1] === 0)
+      ? `<span class="pill bad">not stable</span> L = 0: a double eigenvalue at 1, so an error in v̂ grows the error in p̂ without bound (a simulator)`
+      : `<span class="pill bad">not stable</span> on the circle: an error never dies out`;
+  } else {
+    verdict = `<span class="pill bad">unstable</span> an eigenvalue outside the circle: an error grows by a factor ${fmt(mx, 3)} each step`;
+  }
+  $("eigR").innerHTML = `λ = <b>${fmtL(ev[0])}</b>, <b>${fmtL(ev[1])}</b> &nbsp;|λ|<sub>max</sub> = <b>${fmt(mx, 3)}</b><br>${verdict}`;
+}
+
+// ── the controls ───────────────────────────────────────────────────────────────────────────────────────────────
+function segSet(id, v) { for (const b of $(id).querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.v === v)); }
+function segBind(id, fn) { for (const b of $(id).querySelectorAll("button")) b.addEventListener("click", () => { segSet(id, b.dataset.v); fn(b.dataset.v); }); }
+segBind("feed", (v) => { ui.feed = v; mark({t: S.t, label: {fd: "PD ← finite diff.", hp: "PD ← filtered", obs: "PD ← observer"}[v]}); updateTable(); redrawAll(); });
+segBind("refmode", (v) => { ui.ref = v; if (v === "hold" && S.last) ui.rHold = S.last.r; redrawAll(); });
+segBind("speed", (v) => { ui.speed = +v; });
+$("kpV").textContent = KP.toFixed(3); $("kdV").textContent = KD.toFixed(3); $("bV").textContent = B.toFixed(2);
+
+function readSliders() {
+  ui.sig = +$("sig").value / 1000;
+  ui.wc = +$("wc").value;
+  ui.l1 = 10 ** +$("l1").value; ui.l2 = 10 ** +$("l2").value;
+  $("sigV").textContent = `${fmt(ui.sig * 1000, 1)} mm`;
+  $("wcV").textContent = `${fmt(ui.wc, ui.wc % 1 ? 1 : 0)} rad/s`;
+  $("l1V").textContent = `${fmt(ui.l1, 3)}`;
+  $("l2V").textContent = `${fmt(ui.l2, 3)} 1/s`;
+  $("wcR").innerHTML = `lag ≈ 1/ω<sub>c</sub> = <b>${fmt(1000 / ui.wc, 0)} ms</b>, ω<sub>c</sub>Δt = <b>${fmt(ui.wc * DT, 2)}</b> (Euler needs &lt; 2)<br>finite difference's noise √2 σ/Δt = <b>${fmt(Math.SQRT2 * ui.sig / DT, 3)} m/s</b>`;
+  for (const id of ["l1", "l2"]) $(id).closest(".row").classList.toggle("dim", ui.open);
+  drawEig();
+  updateTable();
+}
+function setGains(l1, l2) { $("l1").value = Math.log10(l1); $("l2").value = Math.log10(l2); readSliders(); }
+for (const id of ["sig", "wc", "l1", "l2"]) $(id).addEventListener("input", readSliders);
+for (const b of $("presets").querySelectorAll("button")) b.addEventListener("click", () => setGains(L_OBS[0] * +b.dataset.a, L_OBS[1] * +b.dataset.b));
+$("open").addEventListener("change", () => {
+  ui.open = $("open").checked;
+  mark({t: S.t, label: ui.open ? "L = 0" : "L on"});
+  readSliders(); redrawAll();
+});
+$("wrong").addEventListener("click", () => {
+  S.xh = [S.xh[0] + OFF_G[0], S.xh[1] + OFF_G[1]];
+  S.diverged = false;
+  mark({t: S.t, label: "wrong start"});
+  redrawAll();
+});
+for (const [id, k] of [["showFd", "fd"], ["showHp", "hp"], ["showObs", "obs"]]) $(id).addEventListener("change", () => { ui.show[k] = $(id).checked; drawCharts(); });
+$("run").addEventListener("click", () => { ui.running = !ui.running; $("run").textContent = ui.running ? "Pause" : "Run"; lastT = null; drawView(); });
+$("reset").addEventListener("click", () => { reset(); updateTable(); redrawAll(); });
+
+function redrawAll() { drawView(); drawCharts(); }
+new ResizeObserver(() => drawView()).observe(view);
+const mq = window.matchMedia("(prefers-color-scheme: dark)");
+mq.addEventListener?.("change", () => { redrawAll(); drawEig(); });
+
+// ── the loop ───────────────────────────────────────────────────────────────────────────────────────────────────
+reset();
+setGains(L_OBS[0], L_OBS[1]);
+let lastT = null, acc = 0, chartTick = 0;
+function frame(now) {
+  if (ui.running) {
+    if (lastT !== null) acc += Math.min(0.1, (now - lastT) / 1000) * ui.speed;
+    lastT = now;
+    let n = 0;
+    while (acc >= DT && n < 12) { step(); acc -= DT; n++; }
+    if (n === 12) acc = 0;
+    if (n) {
+      if (++chartTick % 2 === 0) drawCharts();
+      if (S.statsAge > 12) { S.statsAge = 0; updateTable(); }
+    }
+  }
+  drawView();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+// for checking from the console: __bench.run(seconds) steps the simulation without waiting for frames
+window.__bench = {run(sec) { for (let i = 0; i < Math.round(sec / DT); i++) step(); updateTable(); redrawAll(); return stats(); },
+                  ui, get S() { return S; }};
+</script>
+</body>
+</html>
