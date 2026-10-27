@@ -29,7 +29,7 @@ h1{font-size:18px;font-weight:600;margin:0;letter-spacing:.01em}
 @media (max-width:900px){.app{grid-template-columns:minmax(0,1fr)}}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;min-width:0}
 .world{position:relative}
-canvas{display:block;width:100%;height:auto;touch-action:none;border-radius:6px}
+canvas{display:block;width:100%;height:auto;border-radius:6px}
 #world{aspect-ratio:16/9;max-width:100%}
 .hint{position:absolute;left:10px;top:8px;font-size:12px;color:var(--muted);pointer-events:none;
   background:color-mix(in srgb,var(--panel) 80%,transparent);padding:2px 6px;border-radius:4px}
@@ -56,6 +56,22 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 .strip{padding:8px 10px}
 .strip h3{font-size:12px;margin:0 0 4px;color:var(--muted);font-weight:500}
 .strip canvas{aspect-ratio:3/1;max-width:100%}
+/* the plots and the table span both columns under the map and the controls */
+.app>.bottom{grid-column:1/-1;margin-top:0}
+.app>.tablebox{grid-column:1/-1;padding:4px 10px 8px;overflow-x:auto}
+.about{margin-top:12px;padding:10px 14px;font-size:13px;line-height:1.5}
+.about h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 4px;font-weight:600}
+.about ul{margin:4px 0 8px;padding-left:18px}.about li{margin:3px 0}.about p{margin:4px 0}
+.about code{font-family:var(--mono);font-size:12px}
+/* phones and narrow windows: the map stays in view while the controls and plots scroll under it,
+   and its legend moves below it */
+@media (max-width:900px) and (min-height:560px){.world{position:sticky;top:0;z-index:5;box-shadow:0 4px 10px -6px rgba(0,0,0,.35)}}
+@media (max-width:600px){
+  .legend{position:static;flex-direction:row;flex-wrap:wrap;gap:1px 12px;padding:4px 10px 6px;font-size:11.5px;background:none}
+  .legend .key{display:none}
+  .hint{font-size:11px;left:6px;top:6px}
+  table{font-size:12px}
+}
 table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:10px}
 th,td{text-align:right;padding:3px 6px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;font-family:var(--mono)}
 th:first-child,td:first-child{text-align:left;font-family:var(--sans)}
@@ -72,7 +88,7 @@ footer a{color:var(--accent)}
 
 <nav class="crumb"><a href="../">← Autonomy Playground</a></nav>
 <h1>LOS Guidance</h1>
-<div class="sub">Line-of-sight (LOS) guidance on a waypoint path, with two ways of choosing the reference point on the path: the orthogonal projection of the vessel, and a propagated path particle. Vessels are modelled as point particles with a first-order velocity lag and drawn pointing along their velocity. The path is straight legs joined by polynomial transition curves (Kobryń, 2014), closed into a loop by default; the dashed line joins the waypoints. Drag the square handles to reshape the path while the vessels are moving, drag a vessel to move it.</div>
+<div class="sub">Line-of-sight (LOS) guidance on a waypoint path, with two ways of choosing the reference point on the path: the orthogonal projection of the vessel, and a propagated path particle. Drag the square handles to reshape the path while the vessels are moving, or drag a vessel to move it.</div>
 
 <div class="watch">▶ Video: <a href="https://youtu.be/e-B-lBFzHRs">Line-of-Sight (LOS) Guidance Explained: Path Following for USVs, AUVs and Drones</a> · playlist <a href="https://www.youtube.com/playlist?list=PLcYnzy5eJtss">Guidance and Control</a></div>
 <div class="app">
@@ -82,7 +98,7 @@ footer a{color:var(--accent)}
     <div class="legend">
       <div><span class="sw" style="background:var(--a)"></span>LOS, projected reference</div>
       <div><span class="sw" style="background:var(--b)"></span>LOS, propagated particle</div>
-      <div style="color:var(--muted)">| reference point on the path · → velocity v · ⇢ command v<sub>d</sub> · ▲ travel direction</div>
+      <div class="key" style="color:var(--muted)">| reference point on the path · → velocity v · ⇢ command v<sub>d</sub> · ▲ travel direction</div>
     </div>
   </div>
 
@@ -114,13 +130,12 @@ footer a{color:var(--accent)}
     <div class="row"><label for="speed"><span class="nm">time scale ×</span> <span class="v" id="speedV"></span></label><input type="range" id="speed" min="0.5" max="20" step="0.5" value="4"></div>
     <div class="eq">v<sub>d</sub> = U η<sub>d</sub>, η<sub>d</sub> = (Δ t − e)/√(Δ²+|e|²)<br>e = cross-track error to the reference point<br>projection: s<sub>r</sub> = argmin |p − p<sub>r</sub>(s)|<br>particle: ṡ<sub>r</sub> = t·ṗ + Δ<sub>s</sub> tanh(k<sub>s</sub>s<sub>e</sub>/Δ<sub>s</sub>)<br>t = travel direction × path tangent</div>
   </div>
-</div>
 
 <div class="bottom">
   <div class="panel strip"><h3>Cross-track error |e| [m] (last 120 s)</h3><canvas id="chartE" width="900" height="300"></canvas></div>
   <div class="panel strip"><h3>Speed |v| [m/s], dashed U</h3><canvas id="chartV" width="900" height="300"></canvas></div>
 </div>
-<div class="panel" style="padding:4px 10px 8px;margin-top:12px">
+<div class="panel tablebox">
 <table aria-label="Live state">
 <thead><tr><th>law</th><th>|e| m</th><th>s<sub>e</sub> m</th><th>|v<sub>d</sub>| m/s</th><th>|v| m/s</th><th>s<sub>r</sub> m</th><th>U m/s</th></tr></thead>
 <tbody>
@@ -128,9 +143,35 @@ footer a{color:var(--accent)}
 <tr><td class="bc">LOS, propagated particle</td><td id="b0"></td><td id="b1"></td><td id="b2"></td><td id="b3"></td><td id="b4"></td><td id="b5"></td></tr>
 </tbody></table>
 </div>
+</div>
+
+<div class="panel about">
+<h2>How it works</h2>
+<ul>
+<li><b>Path.</b> Straight legs between draggable waypoints, joined by the symmetric polynomial transition curves of
+Kobryń (2014). The curves have zero curvature at both ends and are sized by a minimum turn radius
+R<sub>min</sub>. The path is a closed loop by default and can be opened; it can be followed in either direction.
+The dashed line joins the waypoints.</li>
+<li><b>Guidance.</b> Lookahead-based LOS guidance (Breivik and Fossen, 2005; Fossen, 2021) in vector form. The
+desired velocity is v<sub>d</sub> = U η<sub>d</sub> with the LOS direction
+η<sub>d</sub> = (Δ t − e)/√(Δ² + |e|²), where t is the path tangent at the reference point, e the cross-track
+error to it and Δ the lookahead distance.</li>
+<li><b>The reference point, two ways.</b> <i>Projected:</i> the point on the path closest to the vessel. Simple,
+but it can jump when the vessel is far from the path or near a tight turn. <i>Propagated particle:</i> the
+reference moves along the path with its own dynamics, ṡ<sub>r</sub> = t·ṗ + Δ<sub>s</sub>
+tanh(k<sub>s</sub>s<sub>e</sub>/Δ<sub>s</sub>), so it tracks the vessel's progress and pulls the along-track
+error s<sub>e</sub> to zero without ever jumping.</li>
+<li><b>Vessel.</b> Drawn as a hull pointing along its velocity, but modelled as a point particle whose velocity
+follows v<sub>d</sub> with a first-order lag τ and an optional speed cap. No heading dynamics, no environmental
+disturbances.</li>
+</ul>
+<p>The plots show the cross-track error and the speed over the last 120 s; the table shows the live state of both
+vessels. Drag a square handle to move a waypoint, drag a vessel to move it; Space pauses. On a touch screen, touch
+a handle or a vessel to drag it, anywhere else to scroll.</p>
+</div>
 
 <footer>
-Guidance: lookahead-based line of sight in vector form, with the reference point either projected onto the path or propagated with a path-variable update law. Path: straight legs joined by polynomial transition curves (Kobryń, 2014). Video: <a href="https://youtu.be/e-B-lBFzHRs">Line-of-Sight (LOS) Guidance Explained</a>; more in the playlist <a href="https://www.youtube.com/playlist?list=PLcYnzy5eJtss">Guidance and Control</a>. Source and references: <a href="https://github.com/erlendcoates/autonomy-playground">github.com/erlendcoates/autonomy-playground</a>.
+Video: <a href="https://youtu.be/e-B-lBFzHRs">Line-of-Sight (LOS) Guidance Explained</a>; more in the playlist <a href="https://www.youtube.com/playlist?list=PLcYnzy5eJtss">Guidance and Control</a>. References: Breivik and Fossen (2005), Fossen (2021), Kobryń (2014); details in the source: <a href="https://github.com/erlendcoates/autonomy-playground">github.com/erlendcoates/autonomy-playground</a>.
 </footer>
 
 <script>
@@ -235,7 +276,11 @@ function step(V,law,dt){
 // ------------------------------------------------------------------ rendering
 const cv=document.getElementById('world'), ctx=cv.getContext('2d');
 const WORLD={x0:-20,x1:260,y0:-10,y1:140}; let sc=1,ox=0,oy=0;
-function fitWorld(){ const w=cv.width,h=cv.height; sc=Math.min(w/(WORLD.x1-WORLD.x0),h/(WORLD.y1-WORLD.y0)); ox=(w-sc*(WORLD.x1-WORLD.x0))/2-WORLD.x0*sc; oy=(h+sc*(WORLD.y1-WORLD.y0))/2+WORLD.y0*sc; }
+// every canvas is drawn in CSS pixels at the screen's resolution: sized to its box times devicePixelRatio
+function fitCanvas(c,g){ const d=window.devicePixelRatio||1, w=c.clientWidth||1, h=c.clientHeight||1;
+  if(c.width!==Math.round(w*d)||c.height!==Math.round(h*d)){ c.width=Math.round(w*d); c.height=Math.round(h*d); }
+  g.setTransform(d,0,0,d,0,0); return [w,h]; }
+function fitWorld(){ const [w,h]=fitCanvas(cv,ctx); sc=Math.min(w/(WORLD.x1-WORLD.x0),h/(WORLD.y1-WORLD.y0)); ox=(w-sc*(WORLD.x1-WORLD.x0))/2-WORLD.x0*sc; oy=(h+sc*(WORLD.y1-WORLD.y0))/2+WORLD.y0*sc; }
 const W2S=(x,y)=>[ox+x*sc,oy-y*sc], S2W=(X,Y)=>[(X-ox)/sc,(oy-Y)/sc];
 const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 function arrow(x0,y0,x1,y1,color,width,dashed){ ctx.save(); ctx.strokeStyle=color; ctx.fillStyle=color; ctx.lineWidth=width; if(dashed) ctx.setLineDash([5,4]);
@@ -243,17 +288,18 @@ function arrow(x0,y0,x1,y1,color,width,dashed){ ctx.save(); ctx.strokeStyle=colo
   ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x1-L*Math.cos(a-0.4),y1-L*Math.sin(a-0.4)); ctx.lineTo(x1-L*Math.cos(a+0.4),y1-L*Math.sin(a+0.4)); ctx.closePath(); ctx.fill(); ctx.restore(); }
 
 function hull(X,Y,psi,col){ // ~8 m vessel, at least 22 px long; body frame x forward, y to port (screen y is flipped)
-  const L=Math.max(28,8*sc), B=0.36*L; ctx.save(); ctx.translate(X,Y); ctx.rotate(-psi);
+  const L=Math.max(22,8*sc), B=0.36*L; ctx.save(); ctx.translate(X,Y); ctx.rotate(-psi);
   ctx.beginPath(); ctx.moveTo(0.5*L,0);
   ctx.quadraticCurveTo(0.3*L,-0.5*B,0.05*L,-0.5*B); ctx.lineTo(-0.5*L,-0.45*B); ctx.lineTo(-0.5*L,0.45*B); ctx.lineTo(0.05*L,0.5*B);
   ctx.quadraticCurveTo(0.3*L,0.5*B,0.5*L,0); ctx.closePath();
   ctx.fillStyle=col; ctx.globalAlpha=.25; ctx.fill(); ctx.globalAlpha=1; ctx.strokeStyle=col; ctx.lineWidth=2; ctx.stroke();
   ctx.fillStyle=col; ctx.beginPath(); ctx.arc(0,0,2.5,0,7); ctx.fill(); ctx.restore(); }
 function draw(){
-  fitWorld(); const w=cv.width,h=cv.height; ctx.clearRect(0,0,w,h); ctx.fillStyle=css('--panel'); ctx.fillRect(0,0,w,h);
+  fitWorld(); const w=cv.clientWidth,h=cv.clientHeight; ctx.clearRect(0,0,w,h); ctx.fillStyle=css('--panel'); ctx.fillRect(0,0,w,h);
   ctx.strokeStyle=css('--grid'); ctx.lineWidth=1; ctx.font='11px '+css('--mono'); ctx.fillStyle=css('--muted');
-  for(let x=Math.ceil(WORLD.x0/20)*20;x<=WORLD.x1;x+=20){const [X]=W2S(x,0); ctx.beginPath();ctx.moveTo(X,0);ctx.lineTo(X,h);ctx.stroke(); ctx.fillText(x+'',X+2,h-4);}
-  for(let y=Math.ceil(WORLD.y0/20)*20;y<=WORLD.y1;y+=20){const [,Y]=W2S(0,y); ctx.beginPath();ctx.moveTo(0,Y);ctx.lineTo(w,Y);ctx.stroke(); ctx.fillText(y+'',4,Y-2);}
+  const lab=20*sc<34?40:20;                                                    // label every 40 m on a narrow map
+  for(let x=Math.ceil(WORLD.x0/20)*20;x<=WORLD.x1;x+=20){const [X]=W2S(x,0); ctx.beginPath();ctx.moveTo(X,0);ctx.lineTo(X,h);ctx.stroke(); if(x%lab===0) ctx.fillText(x+'',X+2,h-4);}
+  for(let y=Math.ceil(WORLD.y0/20)*20;y<=WORLD.y1;y+=20){const [,Y]=W2S(0,y); ctx.beginPath();ctx.moveTo(0,Y);ctx.lineTo(w,Y);ctx.stroke(); if(y%lab===0&&Y>24) ctx.fillText(y+'',4,Y-2);}
   // waypoint polygon
   ctx.save(); ctx.strokeStyle=css('--muted'); ctx.globalAlpha=.9; ctx.lineWidth=1.3; ctx.setLineDash([6,5]); ctx.beginPath();
   wps.forEach(([x,y],i)=>{const [X,Y]=W2S(x,y); if(i===0) ctx.moveTo(X,Y); else ctx.lineTo(X,Y);}); if(path.isLoop) ctx.closePath(); ctx.stroke(); ctx.restore();
@@ -278,7 +324,7 @@ function draw(){
   document.getElementById('hint').textContent=`t = ${tSim.toFixed(1)} s · ×${P.speed} · ${path.isLoop?'loop':'open'} L = ${path.L.toFixed(0)} m · ${dir>0?'forward':'reverse'}${running?'':' · paused'}`;
 }
 function drawStrip(c,key,key2){
-  const g=c.getContext('2d'); const w=c.width,h=c.height; g.clearRect(0,0,w,h); const win=120,t1=tSim,t0=Math.max(0,t1-win);
+  const g=c.getContext('2d'); const [w,h]=fitCanvas(c,g); g.clearRect(0,0,w,h); const win=120,t1=tSim,t0=Math.max(0,t1-win);
   let ymax=1e-6; for(const k of ['proj','part']){const H=veh[k].hist; for(let i=0;i<H.t.length;i++) if(H.t[i]>=t0) ymax=Math.max(ymax,H[key][i],key2?H[key2][i]:0);} ymax=Math.ceil(ymax*1.1*2)/2||1;
   const padL=36,padB=18,padT=6,padR=6; const X=t=>padL+(t-t0)/win*(w-padL-padR), Y=v=>h-padB-(v/ymax)*(h-padB-padT);
   g.strokeStyle=css('--grid'); g.lineWidth=1; g.font='11px '+css('--mono'); g.fillStyle=css('--muted');
@@ -317,14 +363,20 @@ function rebuildKeepingPoints(){ // keep the reference points as world points, r
   for(const k of ['proj','part']) if(keep[k]) veh[k].s_r=pathProject(keep[k][0],keep[k][1]); }
 
 let drag=null;
-function hit(ev){ const r=cv.getBoundingClientRect(); const X=(ev.clientX-r.left)*cv.width/r.width, Y=(ev.clientY-r.top)*cv.height/r.height;
-  for(let i=0;i<wps.length;i++){const [HX,HY]=W2S(wps[i][0],wps[i][1]); if(Math.hypot(HX-X,HY-Y)<12) return {type:'wp',i};}
-  for(const k of ['proj','part']){const [VX,VY]=W2S(veh[k].p[0],veh[k].p[1]); if(Math.hypot(VX-X,VY-Y)<16) return {type:'veh',k};}
-  return null; }
-cv.addEventListener('pointerdown',ev=>{ const h=hit(ev); if(!h) return; cv.setPointerCapture(ev.pointerId); drag=h; });
-cv.addEventListener('pointermove',ev=>{ if(!drag) return; const r=cv.getBoundingClientRect(); const X=(ev.clientX-r.left)*cv.width/r.width, Y=(ev.clientY-r.top)*cv.height/r.height; const [wx,wy]=S2W(X,Y);
+function hit(ev,touch){ const r=cv.getBoundingClientRect(); const X=ev.clientX-r.left, Y=ev.clientY-r.top;
+  const rw=touch?22:9, rv=touch?24:13;                                         // pick radius, CSS px
+  let best=null,bd=Infinity;
+  for(let i=0;i<wps.length;i++){const [HX,HY]=W2S(wps[i][0],wps[i][1]); const d=Math.hypot(HX-X,HY-Y); if(d<rw&&d<bd){bd=d;best={type:'wp',i};}}
+  for(const k of ['proj','part']){const [VX,VY]=W2S(veh[k].p[0],veh[k].p[1]); const d=Math.hypot(VX-X,VY-Y); if(d<rv&&d<bd){bd=d;best={type:'veh',k};}}
+  return best; }
+// a finger on a handle or a vessel drags it; anywhere else on the map it scrolls the page as usual
+cv.addEventListener('touchstart',ev=>{ const t=ev.touches[0]; if(ev.touches.length===1&&hit(t,true)) ev.preventDefault(); },{passive:false});
+cv.addEventListener('touchmove',ev=>{ if(drag) ev.preventDefault(); },{passive:false});
+cv.addEventListener('pointerdown',ev=>{ const h=hit(ev,ev.pointerType==='touch'); if(!h) return; cv.setPointerCapture(ev.pointerId); drag=h; });
+cv.addEventListener('pointermove',ev=>{ if(!drag) return; const r=cv.getBoundingClientRect(); const X=ev.clientX-r.left, Y=ev.clientY-r.top; const [wx,wy]=S2W(X,Y);
   if(drag.type==='wp'){ wps[drag.i]=[wx,wy]; rebuildKeepingPoints(); }
   else { const V=veh[drag.k]; V.p=[wx,wy]; V.v=[0,0]; V.trail=[]; V.s_r=pathProject(wx,wy); } });
+cv.addEventListener('pointermove',ev=>{ if(!drag&&ev.pointerType==='mouse') cv.style.cursor=hit(ev,false)?'grab':''; });
 const endDrag=()=>{drag=null;}; cv.addEventListener('pointerup',endDrag); cv.addEventListener('pointercancel',endDrag);
 
 buildPath(); resetVehicles(); requestAnimationFrame(frame);
