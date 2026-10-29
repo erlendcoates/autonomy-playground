@@ -1,0 +1,813 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Simulation-Based MPC</title>
+<meta name="description" content="Simulation-based model predictive control on a small uncrewed surface vehicle: a fan of turn-rate plans, predicted with a kinematic model, scored by a cost, the cheapest one carried out for one step and the fan made again.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../common/style.css">
+<style>
+  /* the fan's colours: cheap plans bright, dear ones fading into the water, the cheapest one amber (as the video) */
+  :root{--water:#e9eff5;--cheap:#3d8c25;--dear:#b8c5d6;--best:#d98a00;--kay:#7a4fb0;--hull:#2b3140;--deck:#e8743a}
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+    --water:#0f1824;--cheap:#a8d880;--dear:#1f3652;--best:#ffd166;--kay:#b99cf0;--hull:#d7dce5;--deck:#f08a4b}}
+  :root[data-theme="dark"]{--water:#0f1824;--cheap:#a8d880;--dear:#1f3652;--best:#ffd166;--kay:#b99cf0;--hull:#d7dce5;--deck:#f08a4b}
+  .crumb{font-size:12.5px;margin:0 0 4px}.crumb a{color:var(--muted);text-decoration:none}.crumb a:hover{color:var(--accent)}
+  .watch{font-size:13px;margin:-4px 0 10px}.watch a{color:var(--accent)}
+  .app.mp{grid-template-areas:"view ctrl" "charts ctrl";grid-template-rows:auto 1fr}
+  .mp>.view{grid-area:view}.mp>.controls{grid-area:ctrl}.mp>.charts{grid-area:charts;display:flex;flex-direction:column;gap:12px}
+  .mp>.charts .grid2{margin-top:0}
+  @media (max-width:900px){.app.mp{grid-template-areas:"view" "ctrl" "charts";grid-template-rows:auto}}
+  @media (max-width:900px) and (min-height:560px){.mp>.view{position:sticky;top:0;z-index:5;box-shadow:0 4px 10px -6px rgba(0,0,0,.35)}}
+  #map{aspect-ratio:16/9;touch-action:auto}
+  @media (max-width:600px){#map{aspect-ratio:4/3}}
+  canvas.chart,#grid{touch-action:auto}
+  #grid{aspect-ratio:1.45/1}
+  .legend{position:absolute;right:10px;top:8px;font-size:12px;display:flex;flex-direction:column;gap:3px;
+    background:color-mix(in srgb,var(--panel) 85%,transparent);padding:5px 8px;border-radius:4px;pointer-events:none}
+  .legend .bar{display:flex;align-items:center;gap:6px}
+  .legend .grad{width:90px;height:8px;border-radius:2px;background:linear-gradient(90deg,var(--cheap),var(--dear))}
+  .legend .sw{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px}
+  #hint{top:auto;bottom:8px;max-width:calc(100% - 20px)}
+  .warn{color:var(--bad);font-weight:500}
+  .readout{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;line-height:1.5}
+  .tablebox{padding:8px 10px}
+  .tablebox h3,.strip h3{font-size:12px;margin:0 0 4px;color:var(--muted);font-weight:500}
+  td.sym{font-family:var(--sans)}
+  .about{margin-top:12px;padding:10px 14px;font-size:13px;line-height:1.5}
+  .about h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 4px;font-weight:600}
+  .about p{margin:4px 0}
+  .about .eq{font-size:12.5px;margin:4px 0 8px 12px;color:var(--fg)}
+  @media (max-width:600px){.legend{position:static;flex-direction:row;flex-wrap:wrap;gap:2px 12px;background:none;padding:4px 10px 6px;font-size:11.5px}
+    #hint{top:6px;bottom:auto;left:6px;font-size:11px}}
+</style>
+</head>
+<body>
+<nav class="crumb"><a href="../">← Autonomy Playground</a></nav>
+<h1>Simulation-Based MPC</h1>
+<div class="sub">An Otter uncrewed surface vehicle (USV) from Maritime Robotics follows a path by model predictive
+control (MPC). At every step of Δt = 0.5 s it predicts where each plan of turn rates would take it, scores every plan by
+a cost, drops the plans that break a constraint, and carries out the first step of the cheapest one. Drag the kayak
+along its line, the Otter (or its bow handle to turn it), or a buoy; hover a plan or a cell of the cost grid to see its
+cost.</div>
+<div class="watch">▶ Video: <a href="https://youtu.be/npO-H_k6Q-0">Model Predictive Control (MPC) Explained:
+Simulation-Based MPC for a USV</a> · playlists <a href="https://www.youtube.com/playlist?list=PLcYnzy5eJtss">Guidance
+and Control</a>, <a href="https://www.youtube.com/playlist?list=PLCppSPyphAW0">Autonomous Systems</a></div>
+
+<div class="app mp">
+  <div class="panel view">
+    <canvas id="map" aria-label="Top view: the path, the Otter, its fan of plans, the kayak and the buoys"></canvas>
+    <div class="legend">
+      <div class="bar"><span>cheap</span><span class="grad"></span><span>dear</span></div>
+      <div><span class="sw" style="background:var(--best)"></span>the cheapest plan</div>
+      <div><span class="sw" style="background:var(--bad)"></span>dropped: breaks a constraint</div>
+    </div>
+    <div class="hint" id="hint">t = 0.0 s</div>
+  </div>
+
+  <div class="panel controls">
+    <div class="btns">
+      <button class="b" id="run">Pause</button>
+      <button class="b" id="step" title="Carry out one step of Δt = 0.5 s, then plan again">Step Δt</button>
+      <button class="b" id="reset">Reset</button>
+    </div>
+    <div class="seg" role="group" aria-label="Time scale" id="speed">
+      <button data-v="0.5" aria-pressed="false">×½</button>
+      <button data-v="1" aria-pressed="false">×1</button>
+      <button data-v="2" aria-pressed="true">×2</button>
+      <button data-v="4" aria-pressed="false">×4</button>
+    </div>
+    <div class="seg" role="group" aria-label="View" id="viewmode">
+      <button data-v="follow" aria-pressed="true">follow the Otter</button>
+      <button data-v="all" aria-pressed="false">the whole path</button>
+    </div>
+
+    <h2>Plans</h2>
+    <div class="row"><label for="T"><span>horizon <i>N</i> Δt [s]</span><span class="v" id="TV"></span></label><input type="range" id="T" min="2" max="30" step="0.5" value="15"></div>
+    <div class="row"><label>segments: turn rates held in turn</label></div>
+    <div class="seg" role="group" aria-label="Segments" id="segs">
+      <button data-v="1" aria-pressed="false">1</button>
+      <button data-v="2" aria-pressed="true">2</button>
+      <button data-v="3" aria-pressed="false">3</button>
+    </div>
+    <div class="row" id="TaRow"><label for="Ta"><span>first segment [s]</span><span class="v" id="TaV"></span></label><input type="range" id="Ta" min="0.5" max="14.5" step="0.5" value="4"></div>
+    <div class="row"><label>turn rates per segment</label></div>
+    <div class="seg" role="group" aria-label="Turn rates per segment" id="nr">
+      <button data-v="3" aria-pressed="false">3</button>
+      <button data-v="5" aria-pressed="false">5</button>
+      <button data-v="9" aria-pressed="true">9</button>
+      <button data-v="17" aria-pressed="false">17</button>
+    </div>
+    <div class="readout" id="count"></div>
+
+    <h2>Cost</h2>
+    <div class="row"><label for="lam"><span>λ what turning costs [m²/(deg/s)²]</span><span class="v" id="lamV"></span></label><input type="range" id="lam" min="0" max="2" step="0.01" value="0.05"></div>
+
+    <h2>Constraints</h2>
+    <div class="row"><label for="rmax"><span>r<sub>max</sub> turn rate [deg/s]</span><span class="v" id="rmaxV"></span></label><input type="range" id="rmax" min="2" max="20" step="1" value="8"></div>
+    <label class="chk"><input type="checkbox" id="kayak" checked> a kayak crossing the first leg</label>
+    <div class="row"><label for="dsafe"><span>d<sub>safe</sub> kept from the kayak [m]</span><span class="v" id="dsafeV"></span></label><input type="range" id="dsafe" min="2" max="20" step="0.5" value="8"></div>
+    <div class="btns">
+      <button class="b" id="buoy" title="A buoy on the path 15 m ahead of the Otter, kept 2.2 m from">Buoy ahead</button>
+      <button class="b" id="nobuoys">Clear buoys</button>
+    </div>
+
+    <h2>The Otter</h2>
+    <div class="row"><label for="U"><span>U speed [m/s]</span><span class="v" id="UV"></span></label><input type="range" id="U" min="0.5" max="3" step="0.1" value="1.5"></div>
+    <div class="row"><label for="tau"><span>turn lag τ [s] (not in the model)</span><span class="v" id="tauV"></span></label><input type="range" id="tau" min="0" max="4" step="0.1" value="0.6"></div>
+    <label class="chk"><input type="checkbox" id="beads" checked> the steps of the cheapest plan</label>
+  </div>
+
+  <div class="charts">
+    <div class="grid2">
+      <div class="panel strip"><h3>Off the path y<sub>e</sub> [m]: measured, and planned over the horizon</h3><canvas id="cY" class="chart"></canvas></div>
+      <div class="panel strip"><h3>Turn rate r [deg/s]: carried out, and planned</h3><canvas id="cR" class="chart"></canvas></div>
+    </div>
+    <div class="grid2">
+      <div class="panel strip"><h3 id="gridTitle">Cost of each plan, J(r<sub>a</sub>, r<sub>b</sub>)</h3><canvas id="grid"></canvas></div>
+      <div class="panel tablebox">
+        <h3>The cheapest plan, now</h3>
+        <table aria-label="The cheapest plan">
+          <tbody id="tab"></tbody>
+        </table>
+        <div class="note" id="status" style="margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="panel tryit">
+  <h2>Things to try</h2>
+  <ul>
+    <li>Press <b>Pause</b>, then <b>Step Δt</b> a few times. The Otter carries out only the first step of the amber
+      plan, then the whole fan is predicted again from where it really is: a receding horizon. In the charts, the
+      planned curves slide to the left with time, and each new plan starts from the measured value.</li>
+    <li>Watch the Otter reach a bend: it starts to turn before the corner, because the plans that follow the next leg
+      early are cheaper. Shorten the horizon to 3 s and it turns only at the corner, and overshoots.</li>
+    <li>Set λ to 0: turning is free, so the commanded turn rate changes more often and now and then hits the limit
+      (watch the turn-rate chart). Raise λ to 1 or more: the Otter turns gently and takes longer to reach the path.</li>
+    <li>Change the turn rates per segment and the segments, and read the number of plans: it is the rates to the power
+      of the segments, 3 segments of 17 rates is 4913 plans. Trying every plan only works when there are relatively
+      few, which is why other types of MPC use numerical optimization.</li>
+    <li>Pause and drag the kayak along its line so it crosses just before the Otter, then just after: the plans that
+      come within d<sub>safe</sub> of the kayak's predicted positions turn red, and the Otter passes behind or ahead.
+      Hover a red plan to see where MPC predicted the kayak when that plan came too close.</li>
+    <li>Raise the turn lag τ to 3 s. The model does not know about it, so the predictions are wrong, yet the Otter
+      still follows the path: each new plan corrects the errors of the last.</li>
+  </ul>
+</div>
+
+<div class="panel about">
+  <h2>How it works</h2>
+  <p><b>The model</b> (kinematic, no current and no sideslip), one step ahead by forward Euler, with η = [x<sup>n</sup>,
+    y<sup>n</sup>, ψ]<sup>⊤</sup> the position north and east and the heading:</p>
+  <div class="eq">x<sup>n</sup><sub>k+1</sub> = x<sup>n</sup><sub>k</sub> + Δt U cos ψ<sub>k</sub><br>
+    y<sup>n</sup><sub>k+1</sub> = y<sup>n</sup><sub>k</sub> + Δt U sin ψ<sub>k</sub><br>
+    ψ<sub>k+1</sub> = ψ<sub>k</sub> + Δt r<sub>k</sub></div>
+  <p><b>A plan</b> is a turn rate r<sub>k</sub> for each step k = 0, …, N − 1 up to the horizon NΔt, here held
+    constant in each segment (r<sub>a</sub>, then r<sub>b</sub>, then r<sub>c</sub>), each one of an evenly spaced set
+    from −r<sub>max</sub> to r<sub>max</sub>.</p>
+  <p><b>The cost</b> adds up the squared distance from the path, y<sub>e,k</sub>, and the squared turn rates. The
+    distance is measured to the path ahead of the Otter, from the point nearest it on, so a plan that turns round and
+    sails the loop backwards does not score well:</p>
+  <div class="eq">J = Σ<sub>k=1</sub><sup>N</sup> y<sub>e,k</sub><sup>2</sup> + λ Σ<sub>k=0</sub><sup>N−1</sup> r<sub>k</sub><sup>2</sup></div>
+  <p><b>The constraints</b>: |r<sub>k</sub>| ≤ r<sub>max</sub> (no plan asks for more), ‖p<sub>k</sub> −
+    p<sub>k</sub><sup>kayak</sup>‖ ≥ d<sub>safe</sub> with the kayak predicted straight on at its present velocity, and
+    2.2 m from each buoy. A plan that breaks one is dropped. When every plan is dropped, the Otter keeps its last turn
+    rate.</p>
+  <p><b>The Otter</b>, a 2 m USV made by Maritime Robotics, is simulated here as the same kinematic model, every
+    20 ms, except that its turn rate follows the commanded one with a first-order lag τ, which the model leaves out. The
+    numbers are those of the video: U = 1.5 m/s, Δt = 0.5 s, a horizon of 15 s (N = 30), r<sub>a</sub> for 4 s and
+    r<sub>b</sub> for 11 s, 9 rates from −8 to 8 deg/s, λ = 0.05 and d<sub>safe</sub> = 8 m. The path is a closed loop
+    of straight legs; y<sub>e</sub> is positive to starboard of the direction it is sailed.</p>
+  <p><b>Simulation-based MPC</b> tries every plan in a small set and keeps the cheapest. Optimization-based MPC
+    searches for the best plan with a numerical solver instead. A well-known simulation-based MPC for ships is SB-MPC
+    (Johansen, Perez and Cristofaro, 2016): it simulates the ship for a small set of course and speed offsets, each held
+    over the horizon, and keeps the one with the lowest cost, with collision risk and COLREGs compliance in the cost.
+    The MPC here differs in its details (turn-rate plans in segments, following a path), but the idea is the same.</p>
+  <p class="note">T. A. Johansen, T. Perez and A. Cristofaro, "Ship collision avoidance and COLREGS compliance using
+    simulation-based control behavior selection with predictive hazard assessment," <i>IEEE Transactions on Intelligent
+    Transportation Systems</i>, 17(12), 3407–3422, 2016.</p>
+</div>
+
+<footer>Video: <a href="https://youtu.be/npO-H_k6Q-0">Model Predictive Control (MPC) Explained: Simulation-Based MPC
+  for a USV</a>; more in the playlists <a href="https://www.youtube.com/playlist?list=PLcYnzy5eJtss">Guidance and
+  Control</a> and <a href="https://www.youtube.com/playlist?list=PLCppSPyphAW0">Autonomous Systems</a>. The model's
+  numbers are the video's own. Source:
+  <a href="https://github.com/erlendcoates/autonomy-playground">github.com/erlendcoates/autonomy-playground</a>.</footer>
+
+<script type="module">
+import {Plot, css} from "../common/plot.js";
+
+// ── the scene ─────────────────────────────────────────────────────────────────────────────────────────────────────
+const D2R = Math.PI / 180;
+const DT = 0.5;                       // s, one step of the model and of the replanning (the video's)
+const H = 0.02;                       // s, the simulation's step
+const R_KEEP = 2.2;                   // m kept from a buoy's centre (the video's, for buoys and columns)
+const LOOP = [[0, 0], [80, 0], [125, 45], [105, 115], [25, 125], [-20, 60]];   // the path's corners, north and east (m)
+const KAY = {n: 50, e0: -30, e1: 30, v: 0.7, phase0: 13};   // the kayak paddles back and forth across the first leg (m, m/s)
+const START = {n: 10, e: -10, psi: 0};           // the Otter: 10 m to port of the path, heading north
+
+const SEG = LOOP.map((a, i) => {
+  const b = LOOP[(i + 1) % LOOP.length], tn = b[0] - a[0], te = b[1] - a[1], L = Math.hypot(tn, te);
+  return {an: a[0], ae: a[1], tn: tn / L, te: te / L, L};
+});
+
+// signed distance from the path (m), > 0 to starboard of the direction it is sailed
+function offPath(n, e) {
+  let best = Infinity, sgn = 1;
+  for (const s of SEG) {
+    const wn = n - s.an, we = e - s.ae;
+    let u = wn * s.tn + we * s.te;
+    u = u < 0 ? 0 : u > s.L ? s.L : u;
+    const dn = wn - u * s.tn, de = we - u * s.te, d2 = dn * dn + de * de;
+    if (d2 < best) { best = d2; sgn = s.tn * we - s.te * wn >= 0 ? 1 : -1; }
+  }
+  return sgn * Math.sqrt(best);
+}
+
+// a point on the path `ahead` m on from the point nearest (n, e)
+function pathAhead(n, e, ahead) {
+  let best = Infinity, si = 0, su = 0;
+  SEG.forEach((s, i) => {
+    const wn = n - s.an, we = e - s.ae;
+    let u = Math.min(Math.max(wn * s.tn + we * s.te, 0), s.L);
+    const d2 = (wn - u * s.tn) ** 2 + (we - u * s.te) ** 2;
+    if (d2 < best) { best = d2; si = i; su = u; }
+  });
+  let left = ahead;
+  while (su + left > SEG[si].L) { left -= SEG[si].L - su; si = (si + 1) % SEG.length; su = 0; }
+  const s = SEG[si];
+  return [s.an + (su + left) * s.tn, s.ae + (su + left) * s.te];
+}
+
+// the path ahead of (n, e): from the point on the path nearest it, `len` m on, as segments like SEG; the cost measures
+// the distance from this, so that a plan cannot score well by sailing the loop backwards
+function segsAhead(n, e, len) {
+  let best = Infinity, si = 0, su = 0;
+  SEG.forEach((s, i) => {
+    const wn = n - s.an, we = e - s.ae;
+    const u = Math.min(Math.max(wn * s.tn + we * s.te, 0), s.L);
+    const d2 = (wn - u * s.tn) ** 2 + (we - u * s.te) ** 2;
+    if (d2 < best) { best = d2; si = i; su = u; }
+  });
+  const out = [];
+  for (let left = len; left > 0; si = (si + 1) % SEG.length, su = 0) {
+    const s = SEG[si], L = Math.min(s.L - su, left);
+    if (L > 1e-9) out.push({an: s.an + su * s.tn, ae: s.ae + su * s.te, tn: s.tn, te: s.te, L});
+    left -= L;
+  }
+  return out;
+}
+function distTo(segs, n, e) {
+  let best = Infinity;
+  for (const s of segs) {
+    const wn = n - s.an, we = e - s.ae;
+    let u = wn * s.tn + we * s.te;
+    u = u < 0 ? 0 : u > s.L ? s.L : u;
+    const dn = wn - u * s.tn, de = we - u * s.te, d2 = dn * dn + de * de;
+    if (d2 < best) best = d2;
+  }
+  return best;                                 // squared (m²)
+}
+
+// the kayak: back and forth along its line; `phase` (m along its 2 (e1 - e0) m cycle) at t = 0
+const CYC = 2 * (KAY.e1 - KAY.e0);
+function kayakAt(t, phase) {
+  const s = (((phase + KAY.v * t) % CYC) + CYC) % CYC, half = CYC / 2;
+  return s < half ? {n: KAY.n, e: KAY.e0 + s, vn: 0, ve: KAY.v} : {n: KAY.n, e: KAY.e1 - (s - half), vn: 0, ve: -KAY.v};
+}
+
+// ── the settings ──────────────────────────────────────────────────────────────────────────────────────────────────
+const P = {T: 15, Ta: 4, S: 2, n: 9, lam: 0.05, rmax: 8, kayak: true, dsafe: 8, U: 1.5, tau: 0.6, scale: 2,
+           view: "follow", beads: true};
+
+// ── the plans: every combination of the segments' turn rates ──────────────────────────────────────────────────────
+function buildPlans() {
+  const N = Math.max(1, Math.round(P.T / DT)), n = P.n, S = Math.min(P.S, N);
+  const R = Array.from({length: n}, (_, i) => -P.rmax + 2 * P.rmax * i / (n - 1));
+  let segs;
+  if (S === 1) segs = [N];
+  else {
+    const Na = Math.min(Math.max(Math.round(P.Ta / DT), 1), N - (S - 1));
+    if (S === 2) segs = [Na, N - Na];
+    else { const nb = Math.max(1, Math.floor((N - Na) / 2)); segs = [Na, nb, N - Na - nb]; }
+  }
+  const segOf = new Int32Array(N);
+  for (let k = 0, s = 0, acc = segs[0]; k < N; k++) { while (k >= acc) { s++; acc += segs[s]; } segOf[k] = s; }
+  const count = n ** S, idx = [];
+  for (let p = 0; p < count; p++) {
+    const ii = new Array(S);
+    for (let s = S - 1, q = p; s >= 0; s--) { ii[s] = q % n; q = Math.floor(q / n); }
+    idx.push(ii);
+  }
+  return {N, n, S, R, segs, segOf, count, idx, pts: new Float64Array(count * (N + 1) * 2),
+          J: new Float64Array(count), Jp: new Float64Array(count), Jt: new Float64Array(count),
+          hit: new Int32Array(count), what: new Int8Array(count), rank: new Float64Array(count), best: -1, ms: 0,
+          from: null};
+}
+const rateOf = (F, p, k) => F.R[F.idx[p][F.segOf[k]]];
+
+// predict every plan with the model from the pose (n0, e0, psi0) at time t0, score it, drop it if it breaks a constraint
+function evaluate(F, n0, e0, psi0, t0) {
+  const tic = performance.now(), N = F.N, U = P.U, lam = P.lam, d2safe = P.dsafe ** 2, r2keep = R_KEEP ** 2;
+  const kay = P.kayak ? kayakAt(t0, S.phase) : null;
+  const ahead = segsAhead(n0, e0, U * N * DT + 30);           // the path from where the Otter is on
+  let best = -1, bestJ = Infinity;
+  for (let p = 0; p < F.count; p++) {
+    let n = n0, e = e0, psi = psi0, Jp = 0, Jt = 0, hit = -1, what = 0, o = p * (N + 1) * 2;
+    F.pts[o] = n; F.pts[o + 1] = e;
+    for (let k = 0; k < N; k++) {
+      const r = rateOf(F, p, k);
+      n += DT * U * Math.cos(psi); e += DT * U * Math.sin(psi); psi += DT * r * D2R;   // predict
+      o += 2; F.pts[o] = n; F.pts[o + 1] = e;
+      if (hit >= 0) continue;
+      if (kay) {                                                    // a constraint: the kayak, predicted straight on
+        const s = (k + 1) * DT, dn = n - (kay.n + kay.vn * s), de = e - (kay.e + kay.ve * s);
+        if (dn * dn + de * de < d2safe) { hit = k; what = 1; continue; }
+      }
+      for (const b of S.buoys) if ((n - b.n) ** 2 + (e - b.e) ** 2 < r2keep) { hit = k; what = 2; break; }
+      if (hit >= 0) continue;
+      Jp += distTo(ahead, n, e); Jt += lam * r * r;                // the cost
+    }
+    F.Jp[p] = Jp; F.Jt[p] = Jt; F.hit[p] = hit; F.what[p] = what;
+    F.J[p] = hit >= 0 ? Infinity : Jp + Jt;
+    if (F.J[p] < bestJ) { bestJ = F.J[p]; best = p; }
+  }
+  // each plan's rank among those kept, 0 the cheapest, 1 the dearest (its colour)
+  const ok = [];
+  for (let p = 0; p < F.count; p++) if (F.hit[p] < 0) ok.push(p);
+  ok.sort((a, b) => F.J[a] - F.J[b]);
+  ok.forEach((p, i) => { F.rank[p] = ok.length > 1 ? (i / (ok.length - 1)) ** 0.8 : 0; });
+  F.order = [...Array(F.count).keys()].sort((a, b) => (F.hit[b] >= 0) - (F.hit[a] >= 0) || F.rank[b] - F.rank[a]);
+  F.best = best; F.kay = kay; F.from = {n: n0, e: e0, psi: psi0, t: t0};
+  F.ms = performance.now() - tic;
+}
+
+// ── the simulation ────────────────────────────────────────────────────────────────────────────────────────────────
+const S = {};
+let F = null;
+
+function reset() {
+  Object.assign(S, {t: 0, n: START.n, e: START.e, psi: START.psi, r: 0, rcmd: 0, tNext: 0, phase: KAY.phase0, none: false,
+                    buoys: S.buoys || [], hist: [], trail: [], plans: [], closest: Infinity, tLog: -1, tTrail: -1});
+  F = buildPlans();
+  replan();
+}
+
+function replan() {
+  evaluate(F, S.n, S.e, S.psi, S.t);
+  S.none = F.best < 0;
+  if (!S.none) {
+    S.rcmd = rateOf(F, F.best, 0);                                  // the first step of the cheapest plan
+    const o = F.best * (F.N + 1) * 2, ye = [], rr = [];
+    for (let k = 0; k <= F.N; k++) ye.push(offPath(F.pts[o + 2 * k], F.pts[o + 2 * k + 1]));
+    for (let k = 0; k < F.N; k++) rr.push(rateOf(F, F.best, k));
+    S.plans.push({t0: S.t, ye, rr});
+    if (S.plans.length > 4) S.plans.shift();
+  }
+  S.tNext = S.t + DT;
+}
+
+function integrate(h) {
+  S.r = P.tau > 0 ? S.r + h * (S.rcmd * D2R - S.r) / P.tau : S.rcmd * D2R;
+  S.n += h * P.U * Math.cos(S.psi); S.e += h * P.U * Math.sin(S.psi); S.psi += h * S.r;
+  S.t += h;
+  if (P.kayak) { const k = kayakAt(S.t, S.phase); S.closest = Math.min(S.closest, Math.hypot(S.n - k.n, S.e - k.e)); }
+  if (S.t - S.tLog >= 0.1 - 1e-9) {
+    S.tLog = S.t;
+    S.hist.push({t: S.t, ye: offPath(S.n, S.e), rc: S.rcmd, r: S.r / D2R});
+    while (S.hist.length && S.hist[0].t < S.t - 40) S.hist.shift();
+  }
+  if (S.t - S.tTrail >= 0.25 - 1e-9) {
+    S.tTrail = S.t;
+    S.trail.push([S.n, S.e]);
+    if (S.trail.length > 1600) S.trail.shift();
+  }
+}
+
+function advance(dt) {
+  for (let left = dt; left > 1e-9; left -= H) {
+    if (S.t >= S.tNext - 1e-9) replan();
+    integrate(Math.min(H, left));
+  }
+}
+
+function stepOnce() {                     // carry out one step of the plan, then plan again
+  while (S.t < S.tNext - 1e-9) integrate(Math.min(H, S.tNext - S.t));
+  replan();
+}
+
+// ── drawing ───────────────────────────────────────────────────────────────────────────────────────────────────────
+const map = document.getElementById("map"), g = map.getContext("2d");
+let view = {cn: 0, ce: 0, s: 10, W: 1, Hh: 1};
+let hover = -1, hoverFrom = "";
+
+function fit(c) {
+  const d = window.devicePixelRatio || 1, w = c.clientWidth || 1, h = c.clientHeight || 1;
+  if (c.width !== Math.round(w * d) || c.height !== Math.round(h * d)) { c.width = Math.round(w * d); c.height = Math.round(h * d); }
+  c.getContext("2d").setTransform(d, 0, 0, d, 0, 0);
+  return [w, h];
+}
+const W2S = (n, e) => [view.W / 2 + (e - view.ce) * view.s, view.Hh / 2 - (n - view.cn) * view.s];
+const S2W = (X, Y) => [view.cn - (Y - view.Hh / 2) / view.s, view.ce + (X - view.W / 2) / view.s];
+
+function hex(c) {
+  c = c.trim();
+  if (c[0] === "#") {
+    if (c.length === 4) c = "#" + [...c.slice(1)].map((x) => x + x).join("");
+    return [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+  }
+  const m = c.match(/[\d.]+/g);
+  return m ? m.slice(0, 3).map(Number) : [128, 128, 128];
+}
+function palette() {
+  const a = hex(css("--cheap")), b = hex(css("--dear"));
+  return Array.from({length: 65}, (_, i) => {
+    const u = i / 64;
+    return `rgb(${a.map((v, j) => Math.round(v + (b[j] - v) * u)).join(",")})`;
+  });
+}
+
+function camera() {
+  if (P.view === "all") {
+    const ns = LOOP.map((p) => p[0]), es = LOOP.map((p) => p[1]);
+    const n0 = Math.min(...ns) - 12, n1 = Math.max(...ns) + 12, e0 = Math.min(...es) - 12, e1 = Math.max(...es) + 12;
+    view.cn = (n0 + n1) / 2; view.ce = (e0 + e1) / 2; view.s = Math.min(view.W / (e1 - e0), view.Hh / (n1 - n0));
+  } else if (!drag) {                                         // held still under a drag, or what is dragged slides away
+    const reach = Math.max(P.T * P.U, 8);                    // the fan's length, and room round it
+    const ahead = 0.35 * reach, tn = S.n + ahead * Math.cos(S.psi), te = S.e + ahead * Math.sin(S.psi);
+    const s = Math.min(view.W, view.Hh * 1.4) / (2.4 * reach + 14);
+    view.s = s; view.cn += (tn - view.cn) * 0.08; view.ce += (te - view.ce) * 0.08;
+  }
+}
+
+function drawOtter(n, e, psi, s) {
+  const [X, Y] = W2S(n, e);
+  g.save(); g.translate(X, Y); g.rotate(psi); g.scale(s, s);          // x right is east, y down is south: bow = -y
+  const L = 2.0, B = 1.08, w = 0.36;
+  g.fillStyle = css("--hull");
+  for (const side of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(side * (B / 2 - w / 2) - w / 2, L / 2);
+    g.lineTo(side * (B / 2 - w / 2) - w / 2, -L / 2 + 0.3);
+    g.quadraticCurveTo(side * (B / 2 - w / 2), -L / 2 - 0.05, side * (B / 2 - w / 2) + w / 2, -L / 2 + 0.3);
+    g.lineTo(side * (B / 2 - w / 2) + w / 2, L / 2);
+    g.closePath(); g.fill();
+  }
+  g.fillStyle = css("--deck"); g.fillRect(-B / 2 + w * 0.6, -0.55, B - 1.2 * w, 1.15);
+  g.restore();
+}
+
+function drawMap() {
+  const [W, Hh] = fit(map);
+  view.W = W; view.Hh = Hh;
+  camera();
+  const s = view.s;
+  g.fillStyle = css("--water"); g.fillRect(0, 0, W, Hh);
+  // a 10 m grid
+  g.strokeStyle = css("--grid"); g.lineWidth = 1; g.beginPath();
+  const [nTop, eLeft] = S2W(0, 0), [nBot, eRight] = S2W(W, Hh);
+  for (let e = Math.ceil(eLeft / 10) * 10; e <= eRight; e += 10) { const [X] = W2S(0, e); g.moveTo(Math.round(X) + 0.5, 0); g.lineTo(Math.round(X) + 0.5, Hh); }
+  for (let n = Math.ceil(nBot / 10) * 10; n <= nTop; n += 10) { const [, Y] = W2S(n, 0); g.moveTo(0, Math.round(Y) + 0.5); g.lineTo(W, Math.round(Y) + 0.5); }
+  g.stroke();
+  // the path, and which way it is sailed
+  g.strokeStyle = css("--truth"); g.lineWidth = 2; g.globalAlpha = 0.75; g.beginPath();
+  LOOP.forEach((p, i) => { const [X, Y] = W2S(p[0], p[1]); i ? g.lineTo(X, Y) : g.moveTo(X, Y); });
+  g.closePath(); g.stroke(); g.globalAlpha = 1;
+  g.fillStyle = css("--truth");
+  for (const sg of SEG) {
+    const [X, Y] = W2S(sg.an + sg.tn * sg.L / 2, sg.ae + sg.te * sg.L / 2), a = Math.atan2(-sg.tn, sg.te);
+    g.save(); g.translate(X, Y); g.rotate(a); g.beginPath(); g.moveTo(7, 0); g.lineTo(-5, -5); g.lineTo(-5, 5); g.closePath();
+    g.globalAlpha = 0.75; g.fill(); g.restore();
+  }
+  // the Otter's track
+  if (S.trail.length > 1) {
+    g.strokeStyle = css("--muted"); g.lineWidth = 1.5; g.globalAlpha = 0.6; g.beginPath();
+    S.trail.forEach((p, i) => { const [X, Y] = W2S(p[0], p[1]); i ? g.lineTo(X, Y) : g.moveTo(X, Y); });
+    g.lineTo(...W2S(S.n, S.e)); g.stroke(); g.globalAlpha = 1;
+  }
+  // the kayak's line, and the buoys with the circle kept clear
+  if (P.kayak) {
+    g.strokeStyle = css("--kay"); g.lineWidth = 1; g.setLineDash([3, 5]); g.globalAlpha = 0.6; g.beginPath();
+    g.moveTo(...W2S(KAY.n, KAY.e0)); g.lineTo(...W2S(KAY.n, KAY.e1)); g.stroke(); g.setLineDash([]); g.globalAlpha = 1;
+  }
+  for (const b of S.buoys) {
+    const [X, Y] = W2S(b.n, b.e);
+    g.strokeStyle = css("--bad"); g.lineWidth = 1; g.setLineDash([4, 3]);
+    g.beginPath(); g.arc(X, Y, R_KEEP * s, 0, 2 * Math.PI); g.stroke(); g.setLineDash([]);
+    g.fillStyle = css("--bad"); g.beginPath(); g.arc(X, Y, Math.max(3, 0.4 * s), 0, 2 * Math.PI); g.fill();
+  }
+  // the fan: the dear plans first, the cheap ones on top; dropped plans red up to where they break a constraint
+  const pal = palette(), N = F.N, bad = css("--bad");
+  const lw = Math.max(0.8, Math.min(1.8, 260 / Math.max(F.count, 1)));
+  for (const p of F.order) {
+    if (p === F.best) continue;
+    const o = p * (N + 1) * 2, last = F.hit[p] >= 0 ? F.hit[p] + 1 : N;
+    g.strokeStyle = F.hit[p] >= 0 ? bad : pal[Math.round(F.rank[p] * 64)];
+    g.globalAlpha = F.hit[p] >= 0 ? 0.55 : 0.9; g.lineWidth = lw; g.beginPath();
+    for (let k = 0; k <= last; k++) { const [X, Y] = W2S(F.pts[o + 2 * k], F.pts[o + 2 * k + 1]); k ? g.lineTo(X, Y) : g.moveTo(X, Y); }
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+  const polyline = (p, color, width, beads) => {
+    const o = p * (N + 1) * 2;
+    g.strokeStyle = color; g.lineWidth = width; g.lineJoin = "round"; g.beginPath();
+    for (let k = 0; k <= N; k++) { const [X, Y] = W2S(F.pts[o + 2 * k], F.pts[o + 2 * k + 1]); k ? g.lineTo(X, Y) : g.moveTo(X, Y); }
+    g.stroke();
+    if (beads) {
+      g.fillStyle = color;
+      for (let k = 1; k <= N; k++) { const [X, Y] = W2S(F.pts[o + 2 * k], F.pts[o + 2 * k + 1]); g.beginPath(); g.arc(X, Y, 2.6, 0, 2 * Math.PI); g.fill(); }
+    }
+  };
+  if (F.best >= 0) {
+    polyline(F.best, css("--best"), 3, P.beads);
+    const o = F.best * (N + 1) * 2;                                   // its first step: the one carried out
+    g.strokeStyle = css("--best"); g.lineWidth = 6; g.lineCap = "round"; g.beginPath();
+    g.moveTo(...W2S(F.pts[o], F.pts[o + 1])); g.lineTo(...W2S(F.pts[o + 2], F.pts[o + 3])); g.stroke(); g.lineCap = "butt";
+  }
+  if (hover >= 0 && hover < F.count) {
+    polyline(hover, css("--fg"), 2.4, true);
+    if (F.hit[hover] >= 0) {                                         // where it breaks a constraint
+      const k = F.hit[hover], o = hover * (N + 1) * 2, [X, Y] = W2S(F.pts[o + 2 * k + 2], F.pts[o + 2 * k + 3]);
+      g.strokeStyle = bad; g.lineWidth = 2; g.beginPath(); g.arc(X, Y, 6, 0, 2 * Math.PI); g.stroke();
+      if (F.what[hover] === 1 && F.kay) {                            // the kayak where MPC predicted it at that step
+        const t = (k + 1) * DT, [KX, KY] = W2S(F.kay.n + F.kay.vn * t, F.kay.e + F.kay.ve * t);
+        g.strokeStyle = css("--kay"); g.setLineDash([5, 4]); g.lineWidth = 1.5;
+        g.beginPath(); g.arc(KX, KY, P.dsafe * s, 0, 2 * Math.PI); g.stroke(); g.setLineDash([]);
+        g.fillStyle = css("--kay"); g.beginPath(); g.arc(KX, KY, 4, 0, 2 * Math.PI); g.fill();
+      }
+    }
+  }
+  // the kayak: where it is, its circle d_safe, and where MPC predicts it over the horizon
+  if (P.kayak) {
+    const k = kayakAt(S.t, S.phase), [X, Y] = W2S(k.n, k.e), kc = css("--kay");
+    if (F.kay) {
+      g.fillStyle = kc; g.globalAlpha = 0.45;
+      for (let j = 1; j <= N; j += 2) {
+        const t = j * DT, [PX, PY] = W2S(F.kay.n + F.kay.vn * t, F.kay.e + F.kay.ve * t);
+        g.beginPath(); g.arc(PX, PY, 2, 0, 2 * Math.PI); g.fill();
+      }
+      g.globalAlpha = 1;
+    }
+    g.strokeStyle = kc; g.lineWidth = 1; g.globalAlpha = 0.7; g.setLineDash([2, 3]);
+    g.beginPath(); g.arc(X, Y, P.dsafe * s, 0, 2 * Math.PI); g.stroke(); g.setLineDash([]); g.globalAlpha = 1;
+    g.save(); g.translate(X, Y); g.rotate(k.ve > 0 ? 0 : Math.PI); g.scale(s, s);
+    g.fillStyle = kc; g.beginPath(); g.ellipse(0, 0, 2.6, 0.35, 0, 0, 2 * Math.PI); g.fill(); g.restore();
+  }
+  drawOtter(S.n, S.e, S.psi, s);
+  const [BX, BY] = W2S(S.n + 3.2 * Math.cos(S.psi), S.e + 3.2 * Math.sin(S.psi));   // the bow handle
+  g.strokeStyle = css("--muted"); g.lineWidth = 1; g.beginPath(); g.arc(BX, BY, 5, 0, 2 * Math.PI); g.stroke();
+  // a scale bar
+  const len = [5, 10, 20, 50].find((m) => m * s > 60) || 50;
+  g.strokeStyle = g.fillStyle = css("--muted"); g.lineWidth = 2; g.beginPath();
+  g.moveTo(W - 14 - len * s, Hh - 14); g.lineTo(W - 14, Hh - 14); g.stroke();
+  g.font = `11px ${css("--mono")}`; g.textAlign = "right"; g.textBaseline = "bottom"; g.fillText(`${len} m`, W - 14, Hh - 18);
+}
+
+// ── the charts ────────────────────────────────────────────────────────────────────────────────────────────────────
+const cY = new Plot(document.getElementById("cY"), {xLabel: "time from now [s]", yLabel: "off the path [m]"});
+const cR = new Plot(document.getElementById("cR"), {xLabel: "time from now [s]", yLabel: "turn rate [deg/s]"});
+function drawCharts() {
+  const now = S.t, T = F.N * DT, xR = [-20, Math.max(T, 6) + 1];
+  const past = S.hist.filter((h) => h.t >= now - 21);
+  const planY = [], planR = [];
+  S.plans.forEach((pl, i) => {
+    const al = [0.18, 0.3, 0.45, 1][4 - S.plans.length + i], last = i === S.plans.length - 1;
+    planY.push({x: pl.ye.map((_, k) => pl.t0 + k * DT - now), y: pl.ye, color: "--best", width: last ? 2.4 : 1.4, alpha: al,
+                label: last ? "planned" : undefined});
+    const xs = [], ys = [];
+    pl.rr.forEach((r, k) => { xs.push(pl.t0 + k * DT - now, pl.t0 + (k + 1) * DT - now); ys.push(r, r); });
+    planR.push({x: xs, y: ys, color: "--best", width: last ? 2.4 : 1.4, alpha: al, label: last ? "planned" : undefined});
+  });
+  const band = [{x0: 0, x1: T, color: "--grid", alpha: 0.8}], vl = [{x: 0, color: "--fg", label: "now", dash: []}];
+  const ymax = Math.max(4, ...past.map((h) => Math.abs(h.ye)), ...S.plans.flatMap((p) => p.ye.map(Math.abs)));
+  cY.draw({xRange: xR, yRange: [-Math.min(ymax, 30) * 1.1, Math.min(ymax, 30) * 1.1], bands: band, vlines: vl,
+           hlines: [{y: 0, color: "--muted", label: "the path", dash: [2, 3]}],
+           series: [{x: past.map((h) => h.t - now), y: past.map((h) => h.ye), color: "--truth", width: 2, label: "measured"}, ...planY]});
+  cR.draw({xRange: xR, yRange: [-P.rmax * 1.25, P.rmax * 1.25], bands: band, vlines: vl,
+           hlines: [{y: P.rmax, color: "--bad", label: "the limit"}, {y: -P.rmax, color: "--bad"}],
+           series: [{x: past.map((h) => h.t - now), y: past.map((h) => h.r), color: "--truth", width: 2, label: "carried out"},
+                    {x: past.map((h) => h.t - now), y: past.map((h) => h.rc), color: "--muted", width: 1, dash: [3, 3], label: "commanded"},
+                    ...planR]});
+}
+
+// the cost grid: (r_a, r_b); with three segments each cell holds its cheapest r_c, with one a single row
+const gridC = document.getElementById("grid"), gg = gridC.getContext("2d");
+let gridGeo = null;
+function cellPlan(i, j) {                       // the plan in cell (i: r_a, j: r_b)
+  if (F.S === 1) return i;
+  if (F.S === 2) return i * F.n + j;
+  let best = i * F.n * F.n + j * F.n, bj = Infinity;
+  for (let c = 0; c < F.n; c++) { const p = i * F.n * F.n + j * F.n + c; if (F.J[p] < bj) { bj = F.J[p]; best = p; } }
+  return best;
+}
+function drawGrid() {
+  const [W, Hh] = fit(gridC), n = F.n, rows = F.S === 1 ? 1 : n;
+  gg.clearRect(0, 0, W, Hh);
+  const pal = palette(), padL = 54, padB = 34, padT = 8, padR = 70;
+  const cs = Math.min((W - padL - padR) / n, (Hh - padT - padB) / rows), x0 = padL, y0 = padT + (Hh - padT - padB - rows * cs) / 2;
+  gridGeo = {x0, y0, cs, n, rows};
+  for (let i = 0; i < n; i++) for (let j = 0; j < rows; j++) {
+    const p = cellPlan(i, j), X = x0 + i * cs, Y = y0 + (rows - 1 - j) * cs;
+    gg.fillStyle = F.hit[p] >= 0 && !Number.isFinite(F.J[p]) ? css("--bad") : pal[Math.round(F.rank[p] * 64)];
+    gg.globalAlpha = F.hit[p] >= 0 ? 0.55 : 1;
+    gg.fillRect(X + 0.5, Y + 0.5, cs - 1, cs - 1);
+  }
+  gg.globalAlpha = 1;
+  const mark = (p, color, wd) => {
+    if (p < 0) return;
+    const ii = F.idx[p], i = ii[0], j = F.S === 1 ? 0 : ii[1];
+    gg.strokeStyle = color; gg.lineWidth = wd;
+    gg.strokeRect(x0 + i * cs + wd / 2, y0 + (rows - 1 - j) * cs + wd / 2, cs - wd, cs - wd);
+  };
+  mark(F.best, css("--best"), 3);
+  if (hover >= 0) mark(hover, css("--fg"), 2);
+  // axes: the rates
+  gg.fillStyle = css("--muted"); gg.font = `11px ${css("--mono")}`;
+  const lab = (r) => (r > 0 ? "+" : "") + (Math.abs(r - Math.round(r)) < 1e-9 ? r.toFixed(0) : r.toFixed(1)).replace("-", "−");
+  const every = Math.ceil(n / 9);
+  gg.textAlign = "center"; gg.textBaseline = "top";
+  for (let i = 0; i < n; i += every) gg.fillText(lab(F.R[i]), x0 + (i + 0.5) * cs, y0 + rows * cs + 4);
+  gg.textAlign = "right"; gg.textBaseline = "middle";
+  if (F.S > 1) for (let j = 0; j < n; j += every) gg.fillText(lab(F.R[j]), x0 - 5, y0 + (rows - 1 - j + 0.5) * cs);
+  const sub = (x, y, s_, rot) => {             // "r" with its subscript, then the unit, centred on (x, y)
+    gg.save(); gg.translate(x, y); if (rot) gg.rotate(-Math.PI / 2);
+    gg.textAlign = "left"; gg.textBaseline = "middle";
+    const f = css("--sans"), unit = " [deg/s]";
+    gg.font = `12px ${f}`; const w1 = gg.measureText("r").width, w3 = gg.measureText(unit).width;
+    gg.font = `9px ${f}`; const w2 = gg.measureText(s_).width;
+    let x0_ = -(w1 + w2 + w3) / 2;
+    gg.font = `12px ${f}`; gg.fillText("r", x0_, 0); x0_ += w1;
+    gg.font = `9px ${f}`; gg.fillText(s_, x0_, 4); x0_ += w2;
+    gg.font = `12px ${f}`; gg.fillText(unit, x0_, 0); gg.restore();
+  };
+  sub(x0 + n * cs / 2, Hh - 9, "a", false);
+  if (F.S > 1) sub(12, y0 + rows * cs / 2, "b", true);
+  // the colour bar
+  const bx = x0 + n * cs + 16, bh = Math.min(rows * cs, 160), by = y0;
+  for (let i = 0; i < 64; i++) { gg.fillStyle = pal[i]; gg.fillRect(bx, by + bh * i / 64, 12, bh / 64 + 1); }
+  gg.fillStyle = css("--muted"); gg.textAlign = "left"; gg.textBaseline = "top"; gg.font = `11px ${css("--sans")}`;
+  gg.fillText("cheap", bx + 16, by); gg.textBaseline = "bottom"; gg.fillText("dear", bx + 16, by + bh);
+  gg.fillStyle = css("--bad"); gg.globalAlpha = 0.55; gg.fillRect(bx, by + bh + 8, 12, 12); gg.globalAlpha = 1;
+  gg.fillStyle = css("--muted"); gg.textBaseline = "middle"; gg.fillText("dropped", bx + 16, by + bh + 14);
+}
+
+// ── the readouts ──────────────────────────────────────────────────────────────────────────────────────────────────
+const fmt = (v, d = 1) => (Number.isFinite(v) ? v.toFixed(d) : "—").replace("-", "−");
+const sgn = (v, d = 0) => (v > 0 ? "+" : "") + fmt(v, d);
+const names = ["a", "b", "c"];
+function drawTable() {
+  const p = hover >= 0 ? hover : F.best;
+  const rows = [];
+  if (p >= 0) {
+    F.idx[p].forEach((ii, s) => rows.push([`r<sub>${names[s]}</sub> for ${fmt(F.segs[s] * DT, 1)} s`, `${sgn(F.R[ii], F.R[ii] % 1 ? 1 : 0)} deg/s`]));
+    if (F.hit[p] >= 0) rows.push(["breaks a constraint at", `k = ${F.hit[p] + 1} (${fmt((F.hit[p] + 1) * DT)} s): ${F.what[p] === 1 ? "the kayak" : "a buoy"}`]);
+    else {
+      rows.push(["cost J", fmt(F.J[p], 0)]);
+      rows.push(["&nbsp;&nbsp;Σ y<sub>e,k</sub><sup>2</sup> (off the path)", fmt(F.Jp[p], 0)]);
+      rows.push(["&nbsp;&nbsp;λ Σ r<sub>k</sub><sup>2</sup> (turning)", fmt(F.Jt[p], 0)]);
+    }
+  }
+  const dropped = F.hit.reduce((a, h) => a + (h >= 0), 0);
+  rows.push(["plans", `${F.count} = ${F.n}${F.S > 1 ? `<sup>${F.S}</sup>` : ""}, ${dropped} dropped`]);
+  rows.push(["model steps per replan", `${F.count * F.N} (N = ${F.N})`]);
+  rows.push(["time per replan, here", `${fmt(F.ms, 2)} ms`]);
+  rows.push(["off the path now, y<sub>e</sub>", `${sgn(offPath(S.n, S.e), 2)} m`]);
+  if (P.kayak) rows.push(["closest to the kayak so far", `${fmt(S.closest, 1)} m`]);
+  document.getElementById("tab").innerHTML = rows.map(([a, b]) => `<tr><td class="sym">${a}</td><td>${b}</td></tr>`).join("");
+  document.querySelector(".tablebox h3").textContent = hover >= 0 ? "The plan under the pointer" : "The cheapest plan, now";
+  document.getElementById("status").innerHTML = S.none
+    ? '<span class="warn">No plan keeps every constraint: the Otter keeps its last turn rate.</span>'
+    : "The amber plan is the cheapest; its first step (thick) is carried out, then the fan is made again.";
+  document.getElementById("hint").textContent = `t = ${S.t.toFixed(1)} s` + (running ? "" : " · paused");
+}
+
+// ── the loop ──────────────────────────────────────────────────────────────────────────────────────────────────────
+let running = true, last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  if (running && !drag) advance(dt * P.scale);
+  drawMap(); drawCharts(); drawGrid(); drawTable();
+  requestAnimationFrame(frame);
+}
+
+// ── the controls ──────────────────────────────────────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+function rebuild() { F = buildPlans(); S.plans = []; replan(); }
+function slider(id, key, d, onchange) {
+  const el = $(id), out = $(id + "V");
+  const set = () => { P[key] = parseFloat(el.value); out.textContent = P[key].toFixed(d); };
+  set();
+  el.addEventListener("input", () => { set(); onchange(); });
+}
+function seg(id, onpick) {
+  const box = $(id);
+  box.addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    for (const x of box.querySelectorAll("button")) x.setAttribute("aria-pressed", x === b);
+    onpick(b.dataset.v);
+  });
+}
+function showCount() {
+  const N = Math.max(1, Math.round(P.T / DT)), S_ = Math.min(P.S, N);
+  $("count").innerHTML = `N = ${N} steps · ${P.n ** S_} plans · ${P.n ** S_ * N} model steps a replan`;
+  $("TaRow").style.display = P.S > 1 ? "" : "none";
+  $("Ta").max = Math.max(0.5, P.T - 0.5 * (P.S - 1));
+  $("gridTitle").innerHTML = P.S === 1 ? "Cost of each plan, J(r<sub>a</sub>)"
+    : P.S === 2 ? "Cost of each plan, J(r<sub>a</sub>, r<sub>b</sub>)"
+    : "Cost of the cheapest plan for each (r<sub>a</sub>, r<sub>b</sub>): the best r<sub>c</sub> in each cell";
+}
+slider("T", "T", 1, () => { if (P.Ta > P.T - 0.5) { P.Ta = Math.max(0.5, P.T - 0.5); $("Ta").value = P.Ta; $("TaV").textContent = P.Ta.toFixed(1); } showCount(); rebuild(); });
+slider("Ta", "Ta", 1, () => rebuild());
+slider("lam", "lam", 2, () => replan());
+slider("rmax", "rmax", 0, () => rebuild());
+slider("dsafe", "dsafe", 1, () => replan());
+slider("U", "U", 1, () => replan());
+slider("tau", "tau", 1, () => {});
+seg("segs", (v) => { P.S = +v; showCount(); rebuild(); });
+seg("nr", (v) => { P.n = +v; showCount(); rebuild(); });
+seg("speed", (v) => { P.scale = +v; });
+seg("viewmode", (v) => { P.view = v; });
+$("kayak").addEventListener("change", (ev) => { P.kayak = ev.target.checked; S.closest = Infinity; replan(); });
+$("beads").addEventListener("change", (ev) => { P.beads = ev.target.checked; });
+$("run").addEventListener("click", () => { running = !running; $("run").textContent = running ? "Pause" : "Run"; });
+$("step").addEventListener("click", () => { running = false; $("run").textContent = "Run"; stepOnce(); });
+$("reset").addEventListener("click", () => { reset(); view.cn = S.n; view.ce = S.e; });
+$("buoy").addEventListener("click", () => { const [n, e] = pathAhead(S.n, S.e, 15); S.buoys.push({n, e}); replan(); });
+$("nobuoys").addEventListener("click", () => { S.buoys = []; replan(); });
+showCount();
+
+// ── the pointer: drag the Otter, its bow, the kayak or a buoy; hover a plan ──────────────────────────────────────
+let drag = null;
+function pos(ev, el) { const r = el.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; }
+function hit(ev, touch) {
+  const [X, Y] = pos(ev, map), rad = touch ? 22 : 12;
+  const near = (n, e, r) => { const [a, b] = W2S(n, e); return Math.hypot(a - X, b - Y) < r; };
+  if (near(S.n + 3.2 * Math.cos(S.psi), S.e + 3.2 * Math.sin(S.psi), rad)) return {type: "bow"};
+  if (near(S.n, S.e, Math.max(rad, 1.2 * view.s))) return {type: "otter"};
+  for (let i = 0; i < S.buoys.length; i++) if (near(S.buoys[i].n, S.buoys[i].e, rad)) return {type: "buoy", i};
+  if (P.kayak) { const k = kayakAt(S.t, S.phase); if (near(k.n, k.e, Math.max(rad, 2.6 * view.s))) return {type: "kayak"}; }
+  return null;
+}
+function planNear(X, Y) {                       // the plan drawn nearest the pointer, within 8 px
+  let best = -1, bd = 8;
+  const N = F.N;
+  for (let p = 0; p < F.count; p++) {
+    const o = p * (N + 1) * 2, last = F.hit[p] >= 0 ? F.hit[p] + 1 : N;
+    let [ax, ay] = W2S(F.pts[o], F.pts[o + 1]);
+    for (let k = 1; k <= last; k++) {
+      const [bx, by] = W2S(F.pts[o + 2 * k], F.pts[o + 2 * k + 1]), dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+      const u = L2 > 0 ? Math.min(Math.max(((X - ax) * dx + (Y - ay) * dy) / L2, 0), 1) : 0;
+      const d = Math.hypot(ax + u * dx - X, ay + u * dy - Y);
+      if (d < bd) { bd = d; best = p; }
+      ax = bx; ay = by;
+    }
+  }
+  return best;
+}
+map.addEventListener("touchstart", (ev) => { if (ev.touches.length === 1 && hit(ev.touches[0], true)) ev.preventDefault(); }, {passive: false});
+map.addEventListener("touchmove", (ev) => { if (drag) ev.preventDefault(); }, {passive: false});
+map.addEventListener("pointerdown", (ev) => {
+  const h = hit(ev, ev.pointerType === "touch");
+  if (!h) { if (ev.pointerType === "touch") { const [X, Y] = pos(ev, map); hover = planNear(X, Y); } return; }
+  map.setPointerCapture(ev.pointerId); drag = h; hover = -1;
+});
+map.addEventListener("pointermove", (ev) => {
+  const [X, Y] = pos(ev, map);
+  if (!drag) {
+    if (ev.pointerType === "mouse") { map.style.cursor = hit(ev, false) ? "grab" : ""; hover = planNear(X, Y); }
+    return;
+  }
+  const [n, e] = S2W(X, Y);
+  if (drag.type === "otter") { S.n = n; S.e = e; S.trail = []; }
+  else if (drag.type === "bow") { S.psi = Math.atan2(e - S.e, n - S.n); S.r = 0; }
+  else if (drag.type === "buoy") { S.buoys[drag.i] = {n, e}; }
+  else if (drag.type === "kayak") {
+    const k = kayakAt(S.t, S.phase), x = Math.min(Math.max(e, KAY.e0), KAY.e1);
+    const s = k.ve > 0 ? x - KAY.e0 : CYC / 2 + (KAY.e1 - x);
+    S.phase = s - KAY.v * S.t; S.closest = Infinity;
+  }
+  S.plans = []; replan();
+});
+const endDrag = () => { drag = null; };
+map.addEventListener("pointerup", endDrag);
+map.addEventListener("pointercancel", endDrag);
+map.addEventListener("pointerleave", () => { if (!drag) hover = -1; });
+gridC.addEventListener("pointermove", (ev) => {
+  if (!gridGeo) return;
+  const [X, Y] = pos(ev, gridC), {x0, y0, cs, n, rows} = gridGeo;
+  const i = Math.floor((X - x0) / cs), j = rows - 1 - Math.floor((Y - y0) / cs);
+  hover = i >= 0 && i < n && j >= 0 && j < rows ? cellPlan(i, j) : -1;
+});
+gridC.addEventListener("pointerleave", () => { hover = -1; });
+
+reset();
+view.cn = S.n; view.ce = S.e;
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

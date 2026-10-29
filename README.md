@@ -10,6 +10,7 @@ you try what a video shows: drag, change a gain, run it again, and watch what ha
 | Folder | App | Video |
 |---|---|---|
 | [`los-guidance/`](los-guidance/) | LOS Guidance: line-of-sight path following on a waypoint path, with a projected or a propagated reference point | [Line-of-Sight (LOS) Guidance Explained](https://youtu.be/e-B-lBFzHRs) |
+| [`simulation-based-mpc/`](simulation-based-mpc/) | Simulation-Based MPC: model predictive control of an Otter USV by a fan of turn-rate plans, scored by a cost, with a kayak and buoys as constraints | [Model Predictive Control (MPC) Explained](https://youtu.be/npO-H_k6Q-0) |
 | [`state-observer/`](state-observer/) | State Observer: velocity from a noisy distance sensor on a ball and beam, by finite differences, a filtered derivative or a Luenberger observer | [State Observers Explained](https://youtu.be/101cJb9GJKM) |
 
 ## Running them
