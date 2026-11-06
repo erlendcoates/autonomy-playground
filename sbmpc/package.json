@@ -1,0 +1,25 @@
+{
+  "name": "sbmpc",
+  "version": "0.1.0",
+  "description": "Simulation-based model predictive control in 3D: predict a set of plans with any model, score them, drop those that break a constraint, keep the cheapest.",
+  "type": "module",
+  "exports": "./src/index.js",
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "mpc",
+    "model predictive control",
+    "collision avoidance",
+    "motion planning",
+    "drone",
+    "usv"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
