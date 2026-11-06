@@ -11,12 +11,13 @@ you try what a video shows: drag, change a gain, run it again, and watch what ha
 |---|---|---|
 | [`los-guidance/`](los-guidance/) | LOS Guidance: line-of-sight path following on a waypoint path, with a projected or a propagated reference point | [Line-of-Sight (LOS) Guidance Explained](https://youtu.be/e-B-lBFzHRs) |
 | [`simulation-based-mpc/`](simulation-based-mpc/) | Simulation-Based MPC: model predictive control of an Otter USV by a fan of turn-rate plans, scored by a cost, with a kayak and buoys as constraints | [Model Predictive Control (MPC) Explained](https://youtu.be/npO-H_k6Q-0) |
+| [`simulation-based-mpc-3d/`](simulation-based-mpc-3d/) | Simulation-Based MPC in 3D: a quadrotor by acceleration plans, past another drone and obstacles you move in 3D, on the `sbmpc` kernel | [Model Predictive Control (MPC) Explained](https://youtu.be/npO-H_k6Q-0) |
 | [`state-observer/`](state-observer/) | State Observer: velocity from a noisy distance sensor on a ball and beam, by finite differences, a filtered derivative or a Luenberger observer | [State Observers Explained](https://youtu.be/101cJb9GJKM) |
 
 ## Running them
 
-Plain HTML, CSS and JavaScript: no build step and no dependencies apart from a web font. Serve the folder with any
-static web server (the apps load JavaScript modules, which browsers do not load from `file://`), for example
+Plain HTML, CSS and JavaScript: no build step and no dependencies apart from a web font (and three.js, from a CDN,
+for the 3D app). Serve the folder with any static web server (the apps load JavaScript modules, which browsers do not load from `file://`), for example
 
 ```
 python -m http.server 8000
@@ -24,6 +25,12 @@ python -m http.server 8000
 
 and browse to http://localhost:8000/. `common/` holds the shared style (`style.css`) and a small canvas plotter
 (`plot.js`). Each app's folder has its own README, with what it shows, its controls and its references.
+
+## The sbmpc kernel
+
+[`sbmpc/`](sbmpc/) is simulation-based MPC as a small library, in 3D and for any model, with no dependencies. It runs
+in a browser or in Node. The 3D app is built on it, and given the 2D app's model, plans, cost and constraints it
+scores every plan as the 2D app does. Its tests run with `node --test` in that folder.
 
 ## License
 
