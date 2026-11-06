@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Simulation-Based MPC in 3D</title>
+<meta name="description" content="Simulation-based model predictive control of a quadrotor in 3D: a set of acceleration plans, predicted with a model, scored by a cost, the plans that come too close to another drone or an obstacle dropped, and the cheapest one carried out for one step.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../common/style.css">
+<script type="importmap">
+{"imports": {"three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+             "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}
+</script>
+<style>
+  /* the scene's colours; the fan's are the 2D app's: cheap plans bright, dear ones fading, the cheapest one amber */
+  :root{--sky:#e9eff5;--ground:#d9dfd8;--gridline:#c3cbd4;--cheap:#3d8c25;--dear:#b8c5d6;--best:#d98a00;
+    --intr:#7a4fb0;--intr-light:#b99cf0;--hull:#2b3140;--deck:#e8743a;--balloon:#d0453a;--obst:#9aa5b4;--obst-edge:#5b6475}
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+    --sky:#0f1824;--ground:#151d27;--gridline:#2c3c52;--cheap:#a8d880;--dear:#1f3652;--best:#ffd166;
+    --intr:#b99cf0;--intr-light:#dccbff;--hull:#d7dce5;--deck:#f08a4b;--balloon:#e2695f;--obst:#5d6b82;--obst-edge:#8090a8}}
+  :root[data-theme="dark"]{--sky:#0f1824;--ground:#151d27;--gridline:#2c3c52;--cheap:#a8d880;--dear:#1f3652;--best:#ffd166;
+    --intr:#b99cf0;--intr-light:#dccbff;--hull:#d7dce5;--deck:#f08a4b;--balloon:#e2695f;--obst:#5d6b82;--obst-edge:#8090a8}
+  .app.mp{grid-template-areas:"view ctrl" "charts ctrl";grid-template-rows:auto 1fr}
+  .mp>.view{grid-area:view}.mp>.controls{grid-area:ctrl}.mp>.charts{grid-area:charts;display:flex;flex-direction:column;gap:12px}
+  .mp>.charts .grid2{margin-top:0}
+  @media (max-width:900px){.app.mp{grid-template-areas:"view" "ctrl" "charts";grid-template-rows:auto}}
+  @media (max-width:900px) and (min-height:560px){.mp>.view{position:sticky;top:0;z-index:5;box-shadow:0 4px 10px -6px rgba(0,0,0,.35)}}
+  #view{aspect-ratio:16/9;touch-action:none;outline:none}
+  @media (max-width:600px){#view{aspect-ratio:4/3}}
+  canvas.chart,#grid{touch-action:auto}
+  #grid{aspect-ratio:3.4/1}
+  @media (max-width:600px){#grid{aspect-ratio:2/1}}
+  .legend{position:absolute;right:10px;top:8px;font-size:12px;display:flex;flex-direction:column;gap:3px;
+    background:color-mix(in srgb,var(--panel) 85%,transparent);padding:5px 8px;border-radius:4px;pointer-events:none}
+  .legend .bar{display:flex;align-items:center;gap:6px}
+  .legend .grad{width:90px;height:8px;border-radius:2px;background:linear-gradient(90deg,var(--cheap),var(--dear))}
+  .legend .sw{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px}
+  .legend .ball{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:middle;margin:0 8px 0 2px;
+    border:1.5px solid var(--intr);background:color-mix(in srgb,var(--intr) 20%,transparent)}
+  #hint{top:auto;bottom:8px;max-width:calc(100% - 70px)}
+  .compass{position:absolute;right:10px;bottom:8px;width:40px;height:40px;pointer-events:none;
+    background:color-mix(in srgb,var(--panel) 80%,transparent);border-radius:50%}
+  .compass svg{width:100%;height:100%}
+  .fail{position:absolute;inset:0;display:none;align-items:center;justify-content:center;padding:20px;text-align:center;
+    color:var(--muted);font-size:13px}
+  .warn{color:var(--bad);font-weight:500}
+  .readout{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;line-height:1.5}
+  .tablebox{padding:8px 10px}
+  .tablebox h3,.strip h3{font-size:12px;margin:0 0 4px;color:var(--muted);font-weight:500}
+  td.sym{font-family:var(--sans)}
+  .seg button:disabled{color:var(--line);cursor:not-allowed}
+  .selbox{border:1px solid var(--accent);border-radius:5px;padding:8px 10px;display:flex;flex-direction:column;gap:6px}
+  .selbox[hidden]{display:none}
+  .selbox .what{font-weight:500}
+  .about{margin-top:12px;padding:10px 14px;font-size:13px;line-height:1.5}
+  .about h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 4px;font-weight:600}
+  .about p{margin:4px 0}
+  .about .eq{font-size:12.5px;margin:4px 0 8px 12px;color:var(--fg)}
+  .about code{font-family:var(--mono);font-size:12px}
+  @media (max-width:600px){.legend{position:static;flex-direction:row;flex-wrap:wrap;gap:2px 12px;background:none;padding:4px 10px 6px;font-size:11.5px}
+    #hint{top:6px;bottom:auto;left:6px;font-size:11px}}
+</style>
+</head>
+<body>
+<nav class="crumb"><a href="../">← Autonomy Playground</a></nav>
+<h1>Simulation-Based MPC in 3D</h1>
+<div class="sub">A quadrotor follows a path in 3D by model predictive control (MPC). At every step of Δt = 0.25 s it
+predicts where each plan of accelerations would take it, scores every plan by a cost, drops the plans that come too
+close to the other drone, an obstacle or the ground, or go too fast, and carries out the first step of the cheapest one.
+Click the drone, the other drone or an obstacle and drag its arrows to move it in 3D; drag elsewhere to turn the view,
+scroll to zoom; hover a plan or a cell of the cost grid to see its cost.</div>
+<div class="watch">The 3D version of <a href="../simulation-based-mpc/">Simulation-Based MPC</a>, from the video
+<a href="https://youtu.be/npO-H_k6Q-0">Model Predictive Control (MPC) Explained</a>, on the kernel in
+<a href="https://github.com/marceloceccon/autonomy-playground/tree/main/sbmpc"><code>sbmpc/</code></a>.</div>
+
+<div class="app mp">
+  <div class="panel view">
+    <canvas id="view" tabindex="0" aria-label="3D view: the path, the drone, its plans, the other drone and the obstacles"></canvas>
+    <div class="legend">
+      <div class="bar"><span>cheap</span><span class="grad"></span><span>dear</span></div>
+      <div><span class="sw" style="background:var(--best)"></span>the cheapest plan</div>
+      <div><span class="sw" style="background:var(--bad)"></span>dropped: breaks a constraint</div>
+      <div><span class="ball"></span>the other drone, d<sub>safe</sub></div>
+    </div>
+    <div class="hint" id="hint">t = 0.0 s</div>
+    <div class="compass" aria-hidden="true"><svg viewBox="-20 -20 40 40"><g id="needle">
+      <path d="M0,-14 L5,4 L0,1 L-5,4 Z" fill="var(--bad)"/><text x="0" y="15" text-anchor="middle" font-size="9"
+      font-family="var(--sans)" fill="var(--muted)">N</text></g></svg></div>
+    <div class="fail" id="fail"></div>
+  </div>
+
+  <div class="panel controls">
+    <div class="btns">
+      <button class="b" id="run">Pause</button>
+      <button class="b" id="step" title="Carry out one step of Δt = 0.25 s, then plan again">Step Δt</button>
+      <button class="b" id="reset">Reset</button>
+    </div>
+    <div class="seg" role="group" aria-label="Time scale" id="speed">
+      <button data-v="0.5" aria-pressed="false">×½</button>
+      <button data-v="1" aria-pressed="true">×1</button>
+      <button data-v="2" aria-pressed="false">×2</button>
+      <button data-v="4" aria-pressed="false">×4</button>
+    </div>
+    <div class="seg" role="group" aria-label="View" id="viewmode">
+      <button data-v="follow" aria-pressed="true">follow</button>
+      <button data-v="whole" aria-pressed="false">the whole scene</button>
+      <button data-v="top" aria-pressed="false">from above</button>
+    </div>
+
+    <div class="selbox" id="selbox" hidden>
+      <div class="what" id="selWhat"></div>
+      <div class="note" id="selNote"></div>
+      <div class="row" id="sizeRow"><label for="size"><span id="sizeLabel">size [m]</span><span class="v" id="sizeV"></span></label><input type="range" id="size" min="0.5" max="10" step="0.1" value="2"></div>
+      <div class="btns"><button class="b" id="remove">Remove</button><button class="b" id="deselect">Done</button></div>
+    </div>
+
+    <h2>Plans</h2>
+    <div class="row"><label for="T"><span>horizon <i>N</i> Δt [s]</span><span class="v" id="TV"></span></label><input type="range" id="T" min="1" max="10" step="0.25" value="5"></div>
+    <div class="row"><label>segments: accelerations held in turn, then a coast</label></div>
+    <div class="seg" role="group" aria-label="Segments" id="segs">
+      <button data-v="1" aria-pressed="false">1</button>
+      <button data-v="2" aria-pressed="true">2</button>
+      <button data-v="3" aria-pressed="false">3</button>
+    </div>
+    <div class="row"><label for="Tseg"><span>each segment [s]</span><span class="v" id="TsegV"></span></label><input type="range" id="Tseg" min="0.25" max="5" step="0.25" value="1.5"></div>
+    <div class="row"><label>accelerations per axis, north and east</label></div>
+    <div class="seg" role="group" aria-label="Accelerations per axis, north and east" id="nh">
+      <button data-v="3" aria-pressed="true">3</button>
+      <button data-v="5" aria-pressed="false">5</button>
+      <button data-v="7" aria-pressed="false">7</button>
+    </div>
+    <div class="row"><label>accelerations up and down</label></div>
+    <div class="seg" role="group" aria-label="Accelerations up and down" id="nv">
+      <button data-v="1" aria-pressed="false">1 (level)</button>
+      <button data-v="3" aria-pressed="true">3</button>
+      <button data-v="5" aria-pressed="false">5</button>
+    </div>
+    <div class="row"><label for="amax"><span>a<sub>max</sub> on each axis [m/s²]</span><span class="v" id="amaxV"></span></label><input type="range" id="amax" min="0.5" max="5" step="0.25" value="2.5"></div>
+    <div class="readout" id="count"></div>
+
+    <h2>Cost</h2>
+    <div class="row"><label for="lam"><span>λ what accelerating costs [s⁴]</span><span class="v" id="lamV"></span></label><input type="range" id="lam" min="0" max="3" step="0.01" value="0.2"></div>
+    <div class="row"><label for="U"><span>U speed along the path [m/s]</span><span class="v" id="UV"></span></label><input type="range" id="U" min="0.5" max="8" step="0.1" value="4"></div>
+
+    <h2>Constraints</h2>
+    <div class="row"><label for="vmax"><span>v<sub>max</sub> speed limit [m/s]</span><span class="v" id="vmaxV"></span></label><input type="range" id="vmax" min="2" max="15" step="0.5" value="8"></div>
+    <label class="chk"><input type="checkbox" id="intruder" checked> another drone crossing the first leg</label>
+    <div class="row"><label for="dsafe"><span>d<sub>safe</sub> kept from it [m]</span><span class="v" id="dsafeV"></span></label><input type="range" id="dsafe" min="1" max="12" step="0.5" value="5"></div>
+    <div class="row"><label for="vi"><span>its speed [m/s]</span><span class="v" id="viV"></span></label><input type="range" id="vi" min="0" max="6" step="0.1" value="2.5"></div>
+    <div class="row"><label for="dclear"><span>d<sub>clear</sub> kept from obstacles [m]</span><span class="v" id="dclearV"></span></label><input type="range" id="dclear" min="0.5" max="5" step="0.1" value="1.5"></div>
+    <div class="btns">
+      <button class="b" id="addBalloon" title="A balloon on the path, 15 m ahead of the drone">Balloon ahead</button>
+      <button class="b" id="addPillar" title="A pillar on the path, 15 m ahead of the drone">Pillar ahead</button>
+      <button class="b" id="addBuilding" title="A building on the path, 15 m ahead of the drone">Building ahead</button>
+    </div>
+    <div class="btns">
+      <button class="b" id="clearObs">Clear obstacles</button>
+      <button class="b" id="defaultObs">The first ones</button>
+    </div>
+
+    <h2>The drone</h2>
+    <div class="row"><label for="tau"><span>acceleration lag τ [s] (not in the model)</span><span class="v" id="tauV"></span></label><input type="range" id="tau" min="0" max="1.5" step="0.05" value="0.25"></div>
+    <div class="row"><label for="wind"><span>wind from the west [m/s²] (not in the model)</span><span class="v" id="windV"></span></label><input type="range" id="wind" min="0" max="3" step="0.1" value="0"></div>
+    <label class="chk"><input type="checkbox" id="beads" checked> the steps of the cheapest plan</label>
+    <label class="chk"><input type="checkbox" id="dropped" checked> the dropped plans</label>
+    <label class="chk"><input type="checkbox" id="shadows" checked> lines down to the ground</label>
+  </div>
+
+  <div class="charts">
+    <div class="grid2">
+      <div class="panel strip"><h3>Off the path [m]: across (+ to the right) and above, measured and planned</h3><canvas id="cOff" class="chart"></canvas></div>
+      <div class="panel strip"><h3>Speed |v| [m/s]: measured, and planned</h3><canvas id="cV" class="chart"></canvas></div>
+    </div>
+    <div class="grid2">
+      <div class="panel strip"><h3>Acceleration [m/s²]: carried out, and planned</h3><canvas id="cA" class="chart"></canvas></div>
+      <div class="panel tablebox">
+        <h3 id="tabTitle">The cheapest plan, now</h3>
+        <table aria-label="The cheapest plan"><tbody id="tab"></tbody></table>
+        <div class="note" id="status" style="margin-top:8px"></div>
+      </div>
+    </div>
+    <div class="panel strip"><h3 id="gridTitle">Cost of the cheapest plan for each first acceleration</h3><canvas id="grid"></canvas></div>
+  </div>
+</div>
+
+<div class="panel tryit">
+  <h2>Things to try</h2>
+  <ul>
+    <li>Watch the first leg: the other drone crosses it just as the drone gets there. The plans that would come within
+      d<sub>safe</sub> of where MPC predicts it turn red, and the drone brakes and lets it pass. Unlike the boat in the 2D
+      app, it can wait. Press <b>Pause</b> and <b>Step Δt</b> through it, and hover a red plan to see where the other
+      drone was predicted to be when that plan came too close.</li>
+    <li>Click the other drone and drag it along its line, so it crosses earlier or later, or drag it across to move its
+      line up, down or sideways. Raise d<sub>safe</sub> and the drone climbs over it or swerves round it instead of
+      waiting.</li>
+    <li>Press <b>Balloon ahead</b> or <b>Pillar ahead</b> and watch the plans split round it. Drag a balloon onto the
+      drone's path while it flies, and the next plans already go round where it is now.</li>
+    <li>Set the accelerations up and down to <b>1 (level)</b>: the plans stay in a plane, so the drone can no longer
+      climb with the path or go over anything. It goes round or waits.</li>
+    <li>Count the plans: per segment there are the accelerations north × east × up, to the power of the segments.
+      3 segments of 27 is 19 683 plans. Read the model steps per replan too: plans that start the same way share
+      that part of the prediction, so there are far fewer steps than plans × N.</li>
+    <li>Shorten the horizon to 2 s: the drone sees the other drone late, brakes hard, and now and then no plan keeps
+      every constraint. Lengthen it and it reacts early and smoothly.</li>
+    <li>Raise the acceleration lag τ to 0.8 s, or the wind. The model knows about neither, so its predictions are
+      wrong, and the drone may come closer than d<sub>safe</sub>: replanning corrects much, but not everything.</li>
+    <li>Set λ to 0: accelerating is free and the drone jerks about. Raise it to 2: it moves gently, and takes longer to
+      reach the path.</li>
+  </ul>
+</div>
+
+<div class="panel about">
+  <h2>How it works</h2>
+  <p><b>The model</b> is a point mass driven by its acceleration, with p = [x<sup>n</sup>, y<sup>n</sup>,
+    z<sup>n</sup>]<sup>⊤</sup> the position north, east and down (the altitude is h = −z<sup>n</sup>), v the velocity
+    and a the acceleration, held over each step (exactly, for a constant a):</p>
+  <div class="eq">p<sub>k+1</sub> = p<sub>k</sub> + Δt v<sub>k</sub> + ½ Δt² a<sub>k</sub><br>
+    v<sub>k+1</sub> = v<sub>k</sub> + Δt a<sub>k</sub></div>
+  <p>A quadrotor's attitude loop is fast: it tilts its thrust to get the acceleration it is asked for, so its
+    acceleration is what a plan can choose (the drone drawn here tilts by it).</p>
+  <p><b>A plan</b> holds an acceleration for each of one, two or three segments, each one of a lattice: an evenly
+    spaced set of values from −a<sub>max</sub> to a<sub>max</sub> on each axis, every combination of north, east and
+    up. After the last segment it coasts (a = 0) to the horizon NΔt.</p>
+  <p><b>The cost</b> adds up the squared distance from a reference point r<sub>k</sub>, which sets off from the point on
+    the path nearest the drone and moves along it at the speed U (so the cost asks for both the path and the speed on
+    it), and the squared accelerations:</p>
+  <div class="eq">J = Σ<sub>k=1</sub><sup>N</sup> |p<sub>k</sub> − r<sub>k</sub>|<sup>2</sup> + λ Σ<sub>k=0</sub><sup>N−1</sup> |a<sub>k</sub>|<sup>2</sup></div>
+  <p><b>The constraints</b>: |a| ≤ a<sub>max</sub> on each axis (no plan asks for more), |p<sub>k</sub> −
+    q<sub>k</sub>| ≥ d<sub>safe</sub> with the other drone predicted straight on at its present velocity,
+    d<sub>clear</sub> from the surface of each obstacle, an altitude of at least 1 m, and |v<sub>k</sub>| ≤
+    v<sub>max</sub>. A plan that breaks one is dropped, from the step where it does. When every plan is dropped, the drone
+    carries out the one that breaks a constraint latest.</p>
+  <p><b>Plans that start the same way</b> share that part of the prediction. The kernel walks the plans as a tree: it
+    predicts each first segment once, each second segment once for each first, and so on, and when a first segment
+    already breaks a constraint it drops every plan that starts with it at once.</p>
+  <p><b>The drone</b> is simulated as the same model, every 20 ms, except that its acceleration follows the commanded
+    one with a first-order lag τ, and the wind pushes it east; the model leaves both out. The other drone flies back and
+    forth across the first leg, climbing as it goes east.</p>
+  <p><b>The kernel</b>, <code>sbmpc/</code> in this repository, is a small library with no dependencies that runs in
+    a browser or Node: give it a model, the controls each segment may pick from, cost terms and constraints, and it
+    returns every plan's prediction and cost and the cheapest one. Given the 2D app's model, plans, cost and
+    constraints, it scores every plan as the 2D app does (its tests check this).</p>
+  <p class="note">T. A. Johansen, T. Perez and A. Cristofaro, "Ship collision avoidance and COLREGS compliance using
+    simulation-based control behavior selection with predictive hazard assessment," <i>IEEE Transactions on Intelligent
+    Transportation Systems</i>, 17(12), 3407–3422, 2016. S. Liu et al., "Search-based motion planning for quadrotors
+    using linear quadratic minimum time control," <i>IROS</i>, 2017 (acceleration motion primitives).</p>
+</div>
+
+<footer>The 3D version of <a href="../simulation-based-mpc/">Simulation-Based MPC</a>; video:
+  <a href="https://youtu.be/npO-H_k6Q-0">Model Predictive Control (MPC) Explained: Simulation-Based MPC for a USV</a>.
+  3D drawing by <a href="https://threejs.org/">three.js</a>. Source:
+  <a href="https://github.com/marceloceccon/autonomy-playground">github.com/marceloceccon/autonomy-playground</a>.</footer>
+
+<script type="module">
+import {Plot, css} from "../common/plot.js";
+import {Sim, DEFAULTS, DT, MAX_PLANS, schedule, offPath, defaultObstacles} from "./sim.js";
+
+const $ = (id) => document.getElementById(id);
+const P = {...DEFAULTS, scale: 1};
+const ui = {hover: -1, beads: true, dropped: true, shadows: true};
+const sim = new Sim(P);
+
+// the 3D view: Three.js comes from a CDN, so the rest of the page works without it
+let view = null, dragging = null;
+try {
+  const {View3D} = await import("./view3d.js");
+  view = new View3D($("view"), sim, ui, {onSelect: showSelected, onDrag: (on, sel) => { dragging = on ? sel : null; if (!on) sim.replan(); }});
+} catch (err) {
+  console.error(err);
+  $("fail").style.display = "flex";
+  $("fail").textContent = "The 3D view could not start (it needs WebGL, and three.js from cdn.jsdelivr.net). The charts below still run.";
+}
+
+// ── the charts ────────────────────────────────────────────────────────────────────────────────────────────────────
+const cOff = new Plot($("cOff"), {xLabel: "time from now [s]", yLabel: "off the path [m]"});
+const cV = new Plot($("cV"), {xLabel: "time from now [s]", yLabel: "speed [m/s]"});
+const cA = new Plot($("cA"), {xLabel: "time from now [s]", yLabel: "acceleration [m/s²]"});
+function drawCharts() {
+  const now = sim.t, N = sim.planner.N, T = N * DT, xR = [-20, Math.max(T, 4) + 0.5];
+  const past = sim.hist.filter((h) => h.t >= now - 21), x = past.map((h) => h.t - now);
+  const band = [{x0: 0, x1: T, color: "--grid", alpha: 0.8}], vl = [{x: 0, color: "--fg", label: "now", dash: []}];
+  const fade = (i) => [0.18, 0.3, 0.45, 1][4 - sim.plans.length + i];
+  const planned = (key, color, label) => sim.plans.map((pl, i) => {
+    const last = i === sim.plans.length - 1;
+    return {x: pl[key].map((_, k) => pl.t0 + k * DT - now), y: pl[key], color, width: last ? 2.2 : 1.2, alpha: fade(i),
+            dash: [5, 3], label: last ? label : undefined};
+  });
+  const ymax = Math.min(25, Math.max(3, ...past.map((h) => Math.max(Math.abs(h.across), Math.abs(h.above))),
+    ...sim.plans.flatMap((p) => [...p.across, ...p.above].map(Math.abs))));
+  cOff.draw({legendLeft: true, xRange: xR, yRange: [-ymax * 1.1, ymax * 1.1], bands: band, vlines: vl,
+    hlines: [{y: 0, color: "--muted", label: "the path", dash: [2, 3]}],
+    series: [{x, y: past.map((h) => h.across), color: "--est", width: 2, label: "across"},
+             {x, y: past.map((h) => h.above), color: "--alt2", width: 2, label: "above"},
+             ...planned("across", "--est", "planned"), ...planned("above", "--alt2")]});
+  cV.draw({legendLeft: true, xRange: xR, yRange: [0, Math.max(P.vmax, P.U) * 1.15], bands: band, vlines: vl,
+    hlines: [{y: P.vmax, color: "--bad"}, {y: P.U, color: "--muted", dash: [2, 3]}],
+    series: [{x, y: past.map((h) => h.speed), color: "--truth", width: 2, label: "measured"},
+             ...planned("speed", "--best", "planned").map((s) => ({...s, dash: []})),
+             {x: [], y: [], color: "--muted", dash: [2, 3], label: "U, the speed asked for"},
+             {x: [], y: [], color: "--bad", dash: [5, 4], label: "v_max, the limit"}]});
+  const last = sim.plans[sim.plans.length - 1], step = (i) => {
+    const xs = [], ys = [];
+    if (last) last.acc.forEach((a, k) => { xs.push(last.t0 + k * DT - now, last.t0 + (k + 1) * DT - now); ys.push(a[i], a[i]); });
+    return {x: xs, y: ys};
+  };
+  const comps = [["north", "--est"], ["east", "--alt"], ["up", "--alt2"]];
+  cA.draw({legendLeft: true, xRange: xR, yRange: [-P.amax * 1.3, P.amax * 1.3], bands: band, vlines: vl,
+    hlines: [{y: P.amax, color: "--bad"}, {y: -P.amax, color: "--bad"}],
+    series: [...comps.map(([name, color], i) => ({x, y: past.map((h) => h.act[i]), color, width: 1.8, label: name})),
+             ...comps.map(([, color], i) => ({...step(i), color, width: 1.4, dash: [5, 3], alpha: 0.9})),
+             {x: [], y: [], color: "--bad", dash: [5, 4], label: "±a_max"}]});
+}
+
+// ── the cost grid: the first segment's acceleration, north × east, a panel for each vertical level; each cell holds
+//    the cheapest plan that starts with it ──────────────────────────────────────────────────────────────────────────
+const gridC = $("grid"), gg = gridC.getContext("2d");
+let gridGeo = null, cells = null, cellsVer = -1;
+function cellBest() {
+  if (cellsVer === sim.version && cells) return cells;
+  const pl = sim.planner, m = pl.sizes[0], span = pl.span[0];
+  cells = new Int32Array(m);
+  for (let j = 0; j < m; j++) {
+    let best = -1, bj = Infinity, bh = -2;
+    for (let p = j * span; p < (j + 1) * span; p++) {
+      if (pl.J[p] < bj) { bj = pl.J[p]; best = p; }
+      else if (bj === Infinity && pl.hit[p] > bh) { bh = pl.hit[p]; best = p; }
+    }
+    cells[j] = best;
+  }
+  cellsVer = sim.version;
+  return cells;
+}
+function palette() {
+  const hex = (c) => { c = c.trim(); if (c.length === 4) c = "#" + [...c.slice(1)].map((x) => x + x).join(""); return [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16)); };
+  const a = hex(css("--cheap")), b = hex(css("--dear"));
+  return Array.from({length: 65}, (_, i) => `rgb(${a.map((v, j) => Math.round(v + (b[j] - v) * i / 64)).join(",")})`);
+}
+const fmt = (v, d = 1) => (Number.isFinite(v) ? v.toFixed(d) : "—").replace("-", "−");
+const sgn = (v, d = 1) => (v > 0 ? "+" : "") + fmt(v, d);
+function drawGrid() {
+  const d = window.devicePixelRatio || 1, W = gridC.clientWidth || 1, Hh = gridC.clientHeight || 1;
+  if (gridC.width !== Math.round(W * d) || gridC.height !== Math.round(Hh * d)) { gridC.width = Math.round(W * d); gridC.height = Math.round(Hh * d); }
+  gg.setTransform(d, 0, 0, d, 0, 0); gg.clearRect(0, 0, W, Hh);
+  const pl = sim.planner, nh = P.nh, nv = P.nv, cb = cellBest(), pal = palette(), mono = css("--mono"), sans = css("--sans");
+  const padL = 46, padR = 78, padT = 22, padB = 36, gap = 18;
+  const cs = Math.max(4, Math.min((W - padL - padR - (nv - 1) * gap) / (nv * nh), (Hh - padT - padB) / nh));
+  const pw = cs * nh, x0 = padL + Math.max(0, (W - padL - padR - nv * pw - (nv - 1) * gap) / 2), y0 = padT;
+  gridGeo = {x0, y0, cs, nh, nv, pw, gap};
+  const chosen0 = sim.chosen >= 0 ? pl.digits(sim.chosen)[0] : -1, hover0 = ui.hover >= 0 ? pl.digits(ui.hover)[0] : -1;
+  const vals = (n) => Array.from({length: n}, (_, i) => n === 1 ? 0 : -P.amax + 2 * P.amax * i / (n - 1));
+  const vh = vals(nh), vv = vals(nv);
+  gg.font = `11px ${mono}`; gg.fillStyle = css("--muted");
+  for (let id = 0; id < nv; id++) {
+    const px = x0 + id * (pw + gap);
+    gg.textAlign = "center"; gg.textBaseline = "bottom"; gg.fillStyle = css("--muted"); gg.font = `11.5px ${sans}`;
+    gg.fillText(nv === 1 ? "level" : `up ${sgn(-vv[id], 1)}`, px + pw / 2, y0 - 5);
+    for (let in_ = 0; in_ < nh; in_++) for (let ie = 0; ie < nh; ie++) {
+      const j = (in_ * nh + ie) * nv + id, p = cb[j], X = px + ie * cs, Y = y0 + (nh - 1 - in_) * cs;
+      const dropped = pl.hit[p] >= 0;
+      gg.fillStyle = dropped ? css("--bad") : pal[Math.round(Math.pow(pl.rank[p], 0.8) * 64)];
+      gg.globalAlpha = dropped ? 0.5 : 1;
+      gg.fillRect(X + 0.5, Y + 0.5, cs - 1, cs - 1);
+      gg.globalAlpha = 1;
+      const mark = (color, w) => { gg.strokeStyle = color; gg.lineWidth = w; gg.strokeRect(X + w / 2, Y + w / 2, cs - w, cs - w); };
+      if (j === chosen0) mark(css(sim.none ? "--bad" : "--best"), 3);
+      if (j === hover0) mark(css("--fg"), 2);
+    }
+    // the east axis under each panel
+    gg.fillStyle = css("--muted"); gg.font = `10.5px ${mono}`; gg.textAlign = "center"; gg.textBaseline = "top";
+    const every = Math.ceil(nh / 4);
+    for (let ie = 0; ie < nh; ie += every) gg.fillText(sgn(vh[ie], 1), px + (ie + 0.5) * cs, y0 + pw + 3);
+    if (nh > 1 && (nh - 1) % every) gg.fillText(sgn(vh[nh - 1], 1), px + (nh - 0.5) * cs, y0 + pw + 3);
+  }
+  gg.textAlign = "right"; gg.textBaseline = "middle";
+  const every = Math.ceil(nh / 4);
+  for (let in_ = 0; in_ < nh; in_ += every) gg.fillText(sgn(vh[in_], 1), x0 - 5, y0 + (nh - 1 - in_ + 0.5) * cs);
+  gg.font = `12px ${sans}`; gg.textAlign = "center"; gg.textBaseline = "bottom";
+  gg.fillText("east [m/s²]", x0 + (nv * pw + (nv - 1) * gap) / 2, Hh - 2);
+  gg.save(); gg.translate(11, y0 + pw / 2); gg.rotate(-Math.PI / 2); gg.textBaseline = "middle"; gg.fillText("north", 0, 0); gg.restore();
+  // the colour bar
+  const bx = x0 + nv * pw + (nv - 1) * gap + 16, bh = Math.min(pw, 120);
+  for (let i = 0; i < 64; i++) { gg.fillStyle = pal[i]; gg.fillRect(bx, y0 + bh * i / 64, 12, bh / 64 + 1); }
+  gg.fillStyle = css("--muted"); gg.textAlign = "left"; gg.textBaseline = "top"; gg.font = `11px ${sans}`;
+  gg.fillText("cheap", bx + 16, y0); gg.textBaseline = "bottom"; gg.fillText("dear", bx + 16, y0 + bh);
+  gg.fillStyle = css("--bad"); gg.globalAlpha = 0.5; gg.fillRect(bx, y0 + bh + 8, 12, 12); gg.globalAlpha = 1;
+  gg.fillStyle = css("--muted"); gg.textBaseline = "middle"; gg.fillText("dropped", bx + 16, y0 + bh + 14);
+}
+gridC.addEventListener("pointermove", (ev) => {
+  if (!gridGeo) return;
+  const r = gridC.getBoundingClientRect(), X = ev.clientX - r.left, Y = ev.clientY - r.top, g = gridGeo;
+  const id = Math.floor((X - g.x0) / (g.pw + g.gap)), px = g.x0 + id * (g.pw + g.gap);
+  const ie = Math.floor((X - px) / g.cs), in_ = g.nh - 1 - Math.floor((Y - g.y0) / g.cs);
+  const ok = id >= 0 && id < g.nv && ie >= 0 && ie < g.nh && in_ >= 0 && in_ < g.nh && X - px < g.pw;
+  ui.hover = ok ? cellBest()[(in_ * g.nh + ie) * g.nv + id] : -1;
+});
+gridC.addEventListener("pointerleave", () => { ui.hover = -1; });
+
+// ── the readouts ──────────────────────────────────────────────────────────────────────────────────────────────────
+const vec = (u) => `(${sgn(u[0], 1)}, ${sgn(u[1], 1)}, ${sgn(-u[2], 1)})`;
+function drawTable() {
+  const pl = sim.planner, p = ui.hover >= 0 && ui.hover < pl.count ? ui.hover : sim.chosen, rows = [], sc = sim.sched;
+  if (p >= 0) {
+    const dg = pl.digits(p);
+    for (let s = 0; s < sc.S; s++) rows.push([`a<sub>${s + 1}</sub> for ${fmt(sc.ns * DT, 2)} s (north, east, up)`, `${vec(pl.views[s][dg[s]])} m/s²`]);
+    if (sc.coast) rows.push(["then a coast for", `${fmt(sc.segs[sc.segs.length - 1] * DT, 2)} s`]);
+    if (pl.hit[p] >= 0) {
+      rows.push(["breaks a constraint at", `k = ${pl.hit[p] + 1} (${fmt((pl.hit[p] + 1) * DT, 2)} s): ${pl.constraints[pl.what[p]].name}`]);
+    } else {
+      rows.push(["cost J", fmt(pl.J[p], 0)]);
+      rows.push(["&nbsp;&nbsp;Σ |p<sub>k</sub> − r<sub>k</sub>|<sup>2</sup> (the path)", fmt(pl.terms[2 * p], 0)]);
+      rows.push(["&nbsp;&nbsp;λ Σ |a<sub>k</sub>|<sup>2</sup> (accelerating)", fmt(pl.terms[2 * p + 1], 0)]);
+    }
+  }
+  const dropped = pl.count - pl.feasible, pw = sc.S > 1 ? `<sup>${sc.S}</sup>` : "";
+  rows.push(["plans", `${pl.count.toLocaleString("en")} = ${sc.perSeg}${pw}, ${dropped.toLocaleString("en")} dropped`]);
+  rows.push(["model steps per replan", `${pl.steps.toLocaleString("en")} (not shared: ${(pl.count * pl.N).toLocaleString("en")})`]);
+  rows.push(["time per replan, here", `${fmt(pl.ms, 2)} ms`]);
+  const o = offPath(...sim.p);
+  rows.push(["off the path now: across, above", `${sgn(o.across, 2)}, ${sgn(o.above, 2)} m`]);
+  rows.push(["speed, altitude now", `${fmt(Math.hypot(...sim.v), 2)} m/s, ${fmt(-sim.p[2], 1)} m`]);
+  if (P.intruder) rows.push(["closest to the other drone so far", `${fmt(sim.closest, 1)} m`]);
+  if (sim.obstacles.length) rows.push(["closest to an obstacle so far", `${fmt(sim.clearest, 2)} m`]);
+  $("tab").innerHTML = rows.map(([a, b]) => `<tr><td class="sym">${a}</td><td>${b}</td></tr>`).join("");
+  $("tabTitle").textContent = ui.hover >= 0 ? "The plan under the pointer" : "The cheapest plan, now";
+  $("status").innerHTML = sim.none
+    ? '<span class="warn">No plan keeps every constraint: the drone carries out the one that breaks one latest (red).</span>'
+    : "The amber plan is the cheapest; its first step (thick) is carried out, then the plans are made again.";
+  $("hint").textContent = `t = ${sim.t.toFixed(1)} s` + (running ? "" : " · paused") + (dragging ? " · moving" : "");
+  if (view) $("needle").setAttribute("transform", `rotate(${view.northAngle() * 180 / Math.PI})`);
+}
+
+// ── the loop ──────────────────────────────────────────────────────────────────────────────────────────────────────
+let running = true, last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  const hold = dragging && dragging.type !== "obstacle";       // obstacles move while it flies; the drones hold still
+  if (running && !hold) sim.advance(dt * P.scale);
+  if (view) view.frame(dt);
+  drawCharts(); drawGrid(); drawTable();
+  requestAnimationFrame(frame);
+}
+
+// ── the controls ──────────────────────────────────────────────────────────────────────────────────────────────────
+function rebuild() { sim.rebuild(); showCount(); }
+function slider(id, key, d, onchange) {
+  const el = $(id), out = $(id + "V");
+  const set = () => { P[key] = parseFloat(el.value); out.textContent = P[key].toFixed(d); };
+  set();
+  el.addEventListener("input", () => { const old = P[key]; set(); onchange(old); });
+}
+function seg(id, onpick) {
+  const box = $(id);
+  box.addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b || b.disabled) return;
+    for (const x of box.querySelectorAll("button")) x.setAttribute("aria-pressed", x === b);
+    onpick(b.dataset.v);
+  });
+}
+function showCount() {
+  const sc = schedule(P);
+  const coast = sc.coast ? `, then a coast for ${(sc.segs[sc.segs.length - 1] * DT).toFixed(2)} s` : "";
+  $("count").innerHTML = `N = ${sc.N} steps · ${sc.S} × ${(sc.ns * DT).toFixed(2)} s${coast}<br>` +
+    `${sc.perSeg} accelerations a segment · ${sc.count.toLocaleString("en")} plans`;
+  // the choices that would make too many plans
+  for (const [id, key] of [["segs", "S"], ["nh", "nh"], ["nv", "nv"]]) {
+    for (const b of $(id).querySelectorAll("button")) {
+      const n = schedule({...P, [key]: +b.dataset.v}).count;
+      b.disabled = n > MAX_PLANS;
+      b.title = b.disabled ? `${n.toLocaleString("en")} plans: more than ${MAX_PLANS.toLocaleString("en")}` : "";
+    }
+  }
+  $("gridTitle").textContent = sc.S === 1 ? "Cost of each plan, by its acceleration (north × east, a panel for each up or down)"
+    : "Cost of the cheapest plan for each first acceleration (north × east, a panel for each up or down)";
+}
+slider("T", "T", 2, rebuild);
+slider("Tseg", "Tseg", 2, rebuild);
+slider("amax", "amax", 2, rebuild);
+slider("lam", "lam", 2, () => sim.replan());
+slider("U", "U", 1, () => sim.replan());
+slider("vmax", "vmax", 1, () => sim.replan());
+slider("dsafe", "dsafe", 1, () => sim.replan());
+slider("vi", "vi", 1, (old) => { sim.keepIntruder(old); sim.replan(); });
+slider("dclear", "dclear", 1, () => { sim.clearest = Infinity; sim.replan(); });
+slider("tau", "tau", 2, () => {});
+slider("wind", "wind", 1, () => {});
+seg("segs", (v) => { P.S = +v; rebuild(); });
+seg("nh", (v) => { P.nh = +v; rebuild(); });
+seg("nv", (v) => { P.nv = +v; rebuild(); });
+seg("speed", (v) => { P.scale = +v; });
+seg("viewmode", (v) => { if (view) view.setMode(v); });
+$("intruder").addEventListener("change", (ev) => { P.intruder = ev.target.checked; sim.closest = Infinity; if (!P.intruder && view?.selected?.type === "intruder") view.select(null); sim.replan(); });
+$("beads").addEventListener("change", (ev) => { ui.beads = ev.target.checked; sim.version++; });
+$("dropped").addEventListener("change", (ev) => { ui.dropped = ev.target.checked; sim.version++; });
+$("shadows").addEventListener("change", (ev) => { ui.shadows = ev.target.checked; sim.version++; });
+const setRunning = (on) => { running = on; $("run").textContent = on ? "Pause" : "Run"; };
+$("run").addEventListener("click", () => setRunning(!running));
+$("step").addEventListener("click", () => { setRunning(false); sim.stepOnce(); });
+$("reset").addEventListener("click", () => { sim.reset(); if (view) view.resetCamera(); });
+const addAhead = (kind) => { const o = sim.addAhead(kind); if (view) { view.syncObstacles(); view.select({type: "obstacle", id: o.id}); } };
+$("addBalloon").addEventListener("click", () => addAhead("balloon"));
+$("addPillar").addEventListener("click", () => addAhead("pillar"));
+$("addBuilding").addEventListener("click", () => addAhead("building"));
+$("clearObs").addEventListener("click", () => { if (view?.selected?.type === "obstacle") view.select(null); sim.obstacles = []; sim.clearest = Infinity; sim.replan(); view?.syncObstacles(); });
+$("defaultObs").addEventListener("click", () => {
+  if (view?.selected?.type === "obstacle") view.select(null);
+  sim.obstacles = defaultObstacles(); sim.clearest = Infinity; sim.replan(); view?.syncObstacles();
+});
+
+// the selected object: what it is, how to move it, its size
+const NAMES = {drone: "The drone", intruder: "The other drone", balloon: "A balloon", pillar: "A pillar", building: "A building"};
+function selectedObstacle() { const s = view?.selected; return s?.type === "obstacle" ? sim.obstacles.find((o) => o.id === s.id) : null; }
+function showSelected(sel) {
+  const box = $("selbox");
+  box.hidden = !sel;
+  if (!sel) return;
+  const o = selectedObstacle();
+  $("selWhat").textContent = NAMES[o ? o.kind : sel.type];
+  $("selNote").textContent = sel.type === "drone" ? "Drag its arrows to move it; it keeps its velocity."
+    : sel.type === "intruder" ? "Drag it along its line to move it on the line, or across to move the line itself."
+    : o.kind === "balloon" ? "Drag its arrows to move it anywhere in 3D, while the drone flies."
+    : "Drag its arrows to move it across the ground, while the drone flies.";
+  $("sizeRow").style.display = o ? "" : "none";
+  $("remove").style.display = o ? "" : "none";
+  if (o) {
+    const s = o.shape, v = o.kind === "building" ? s.half[0] : s.radius;
+    $("sizeLabel").textContent = o.kind === "building" ? "half its width [m]" : "radius [m]";
+    $("size").value = v; $("sizeV").textContent = v.toFixed(1);
+  }
+}
+$("size").addEventListener("input", (ev) => {
+  const o = selectedObstacle(), v = parseFloat(ev.target.value);
+  if (!o) return;
+  $("sizeV").textContent = v.toFixed(1);
+  if (o.kind === "building") { o.shape.half[0] = o.shape.half[1] = v; }
+  else { o.shape.radius = v; if (o.kind === "balloon") o.shape.center[2] = Math.min(o.shape.center[2], -v); }
+  sim.clearest = Infinity; sim.replan(); view.syncObstacles();
+});
+$("remove").addEventListener("click", () => { const o = selectedObstacle(); if (o) { view.select(null); sim.removeObstacle(o.id); view.syncObstacles(); } });
+$("deselect").addEventListener("click", () => view?.select(null));
+window.addEventListener("keydown", (ev) => {
+  if (ev.target.closest("input, select, textarea")) return;
+  if (ev.key === "Escape") view?.select(null);
+  if ((ev.key === "Delete" || ev.key === "Backspace") && selectedObstacle()) { ev.preventDefault(); $("remove").click(); }
+});
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => view?.applyTheme());
+showCount();
+if (new URLSearchParams(location.search).has("debug")) window.app = {sim, view, P, ui};   // for poking at it from the console
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
