@@ -1,0 +1,1039 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MPPI</title>
+<meta name="description" content="Model predictive path integral control (MPPI) on a small uncrewed surface vehicle in Nørvasundet, Ålesund: random plans, simulated and weighted by their cost, following a path you can drag or collecting drifting litter.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../common/style.css">
+<style>
+  :root{--water:#cfe2ee;--cheap:#1f7a12;--dear:#7f97ad;--best:#b85f00;--oth:#7a4fb0;--hull:#20252f;--deck:#e8743a;--net:#e8743a;--unseen:#0d2438}
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+    --water:#0f1824;--cheap:#a8ee70;--dear:#2b4664;--best:#ffd166;--oth:#b99cf0;--hull:#e4e8ef;--deck:#f08a4b;--net:#ffb070;--unseen:#000810}}
+  :root[data-theme="dark"]{--water:#0f1824;--cheap:#a8ee70;--dear:#2b4664;--best:#ffd166;--oth:#b99cf0;--hull:#e4e8ef;--deck:#f08a4b;--net:#ffb070;--unseen:#000810}
+  .crumb{font-size:12.5px;margin:0 0 4px}.crumb a{color:var(--muted);text-decoration:none}.crumb a:hover{color:var(--accent)}
+  .watch{font-size:13px;margin:-4px 0 10px}.watch a{color:var(--accent)}
+  .app.mp{grid-template-areas:"view ctrl" "charts ctrl";grid-template-rows:auto 1fr}
+  .mp>.view{grid-area:view}.mp>.controls{grid-area:ctrl}.mp>.charts{grid-area:charts;display:flex;flex-direction:column;gap:12px}
+  .mp>.charts .grid2{margin-top:0}
+  @media (max-width:900px){.app.mp{grid-template-areas:"view" "ctrl" "charts";grid-template-rows:auto}}
+  @media (max-width:900px) and (min-height:560px){.mp>.view{position:sticky;top:0;z-index:5;box-shadow:0 4px 10px -6px rgba(0,0,0,.35)}}
+  #map{aspect-ratio:16/9;touch-action:auto}
+  @media (max-width:600px){#map{aspect-ratio:4/3}}
+  canvas.chart,#wchart{touch-action:auto}
+  #wchart{aspect-ratio:1.9/1}
+  .legend{position:absolute;right:10px;top:8px;font-size:12px;display:flex;flex-direction:column;gap:3px;
+    background:color-mix(in srgb,var(--panel) 85%,transparent);padding:5px 8px;border-radius:4px;pointer-events:none}
+  .legend .bar{display:flex;align-items:center;gap:6px}
+  .legend .grad{width:90px;height:8px;border-radius:2px;background:linear-gradient(90deg,var(--dear),var(--cheap))}
+  .legend .sw{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px}
+  #hint{top:auto;bottom:8px;max-width:calc(100% - 20px)}
+  .warn{color:var(--bad);font-weight:500}
+  .readout{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;line-height:1.5}
+  .tablebox{padding:8px 10px}
+  .tablebox h3,.strip h3{font-size:12px;margin:0 0 4px;color:var(--muted);font-weight:500}
+  td.sym{font-family:var(--sans)}
+  .about{margin-top:12px;padding:10px 14px;font-size:13px;line-height:1.5}
+  .about h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 4px;font-weight:600}
+  .about p{margin:4px 0}
+  .about .eq{font-size:12.5px;margin:4px 0 8px 12px;color:var(--fg)}
+  #mode button{padding:9px 4px;font-weight:500}
+  [hidden]{display:none!important}
+  @media (max-width:600px){.legend{position:static;flex-direction:row;flex-wrap:wrap;gap:2px 12px;background:none;padding:4px 10px 6px;font-size:11.5px}
+    #hint{top:6px;bottom:auto;left:6px;font-size:11px}}
+</style>
+</head>
+<body>
+<nav class="crumb"><a href="../">← Autonomy Playground</a></nav>
+<h1>MPPI</h1>
+<div class="sub">Model predictive path integral control (MPPI) steers an Otter uncrewed surface vehicle (USV) through Nørvasundet in
+Ålesund. At every step it adds random wiggles to its current plan, simulates every plan, weights each by its cost, and carries
+out the first step of the weighted average. Drag the square handles to reshape the path, or switch to collecting drifting litter.</div>
+<div class="watch">▶ Video: <a href="https://youtu.be/LReozcbB-ZE">Model Predictive Path Integral (MPPI) Control Explained:
+Sampling-Based MPC for a USV</a> · playlists <a href="https://www.youtube.com/playlist?list=PLcYnzy5eJtss">Guidance
+and Control</a>, <a href="https://www.youtube.com/playlist?list=PLCppSPyphAW0">Autonomous Systems</a></div>
+
+<div class="app mp">
+  <div class="panel view">
+    <canvas id="map" aria-label="Map of Nørvasundet: the Otter, its random plans and what it must keep clear of"></canvas>
+    <div class="legend">
+      <div class="bar"><span>small vote</span><span class="grad"></span><span>big vote</span></div>
+      <div><span class="sw" id="swBest" style="background:var(--best)"></span><span id="lgBest">the weighted average</span></div>
+      <div><span class="sw" style="background:var(--bad)"></span>dropped: too shallow or too close</div>
+    </div>
+    <div class="hint" id="hint">t = 0.0 s</div>
+  </div>
+
+  <div class="panel controls">
+    <div class="seg" role="group" aria-label="The task" id="mode">
+      <button data-v="path" aria-pressed="true">Follow a path</button>
+      <button data-v="litter" aria-pressed="false">Collect litter</button>
+    </div>
+    <div class="btns">
+      <button class="b" id="run">Pause</button>
+      <button class="b" id="step" title="Carry out one step, then plan again">Step Δt</button>
+      <button class="b" id="reset">Reset</button>
+    </div>
+    <div class="seg" role="group" aria-label="Time scale" id="speed">
+      <button data-v="0.5" aria-pressed="false">×½</button>
+      <button data-v="1" aria-pressed="false">×1</button>
+      <button data-v="2" aria-pressed="true">×2</button>
+      <button data-v="4" aria-pressed="false">×4</button>
+      <button data-v="8" aria-pressed="false">×8</button>
+    </div>
+    <div class="seg" role="group" aria-label="View" id="viewmode">
+      <button data-v="follow" aria-pressed="false">follow</button>
+      <button data-v="task" aria-pressed="true" id="viewTask">the path</button>
+      <button data-v="all" aria-pressed="false">the strait</button>
+    </div>
+
+    <h2>Random plans</h2>
+    <div class="row"><label for="Ms"><span>M number of plans</span><span class="v" id="MsV"></span></label><input type="range" id="Ms" min="0" max="8" step="1" value="5"></div>
+    <div class="row"><label for="T_h"><span>horizon N Δt [s]</span><span class="v" id="T_hV"></span></label><input type="range" id="T_h" min="3" max="60" step="1" value="30"></div>
+    <div class="row"><label for="sig"><span>σ size of the wiggle [deg/s]</span><span class="v" id="sigV"></span></label><input type="range" id="sig" min="0.2" max="10" step="0.1" value="3"></div>
+    <div class="row"><label for="alp"><span>α how long a wiggle lasts</span><span class="v" id="alpV"></span></label><input type="range" id="alp" min="0" max="0.98" step="0.01" value="0.8"></div>
+    <div class="row" data-for="litter"><label>inputs it plans</label></div>
+    <div class="seg" role="group" aria-label="Inputs it plans" id="inputs" data-for="litter">
+      <button data-v="1" aria-pressed="true">turn rate</button>
+      <button data-v="2" aria-pressed="false">turn rate and speed</button>
+    </div>
+    <div class="row two"><label for="sigU"><span>σ<sub>U</sub> size of the speed wiggle [m/s]</span><span class="v" id="sigUV"></span></label><input type="range" id="sigU" min="0.05" max="1" step="0.05" value="0.3"></div>
+    <div class="row two"><label for="Umax"><span>U<sub>max</sub> top speed [m/s]</span><span class="v" id="UmaxV"></span></label><input type="range" id="Umax" min="1" max="3" step="0.1" value="2.5"></div>
+
+    <h2>The votes</h2>
+    <div class="row"><label for="Ts"><span>T temperature</span><span class="v" id="TsV"></span></label><input type="range" id="Ts" min="-1" max="4" step="0.02" value="1.6"></div>
+    <div class="row"><label>steer by</label></div>
+    <div class="seg" role="group" aria-label="Steer by" id="steer">
+      <button data-v="avg" aria-pressed="true">weighted average</button>
+      <button data-v="best" aria-pressed="false">cheapest plan</button>
+    </div>
+    <div class="readout" id="count"></div>
+
+    <h2>Cost</h2>
+    <div class="row" data-for="path"><label for="lam"><span>λ what turning costs</span><span class="v" id="lamV"></span></label><input type="range" id="lam" min="0" max="2" step="0.01" value="0.05"></div>
+    <div class="row" data-for="path"><label for="Rmin"><span>R<sub>min</sub> the path's corners [m]</span><span class="v" id="RminV"></span></label><input type="range" id="Rmin" min="0" max="30" step="1" value="10"></div>
+    <div class="row" data-for="litter"><label for="Ae"><span>look where it hasn't looked lately</span><span class="v" id="AeV"></span></label><input type="range" id="Ae" min="0" max="4" step="0.1" value="1"></div>
+    <div class="row" data-for="litter"><label for="At"><span>keep seen litter in view</span><span class="v" id="AtV"></span></label><input type="range" id="At" min="0" max="20" step="0.5" value="6"></div>
+    <div class="row" data-for="litter"><label for="Ab"><span>stay inside the area</span><span class="v" id="AbV"></span></label><input type="range" id="Ab" min="0" max="2" step="0.05" value="0.3"></div>
+    <div class="row" data-for="litter"><label for="Ap"><span>avoid hard turns</span><span class="v" id="ApV"></span></label><input type="range" id="Ap" min="0" max="2" step="0.05" value="0.15"></div>
+    <div class="row two"><label for="Av"><span>keep near speed U</span><span class="v" id="AvV"></span></label><input type="range" id="Av" min="0" max="4" step="0.05" value="0.5"></div>
+
+    <h2 data-for="path">Keeping clear</h2>
+    <label class="chk" data-for="path"><input type="checkbox" id="other" checked> another Otter, the other way round</label>
+    <div class="row" data-for="path"><label for="dsafe"><span>d<sub>safe</sub> kept from it [m]</span><span class="v" id="dsafeV"></span></label><input type="range" id="dsafe" min="2" max="20" step="0.5" value="6"></div>
+    <div class="btns" data-for="path">
+      <button class="b" id="buoy" title="A buoy on the path 15 m ahead of the Otter">Buoy ahead</button>
+      <button class="b" id="nobuoys">Clear buoys</button>
+      <button class="b" id="resetPath">Reset path</button>
+    </div>
+
+    <h2 data-for="litter">The litter</h2>
+    <div class="row" data-for="litter"><label for="nl"><span>pieces on the water</span><span class="v" id="nlV"></span></label><input type="range" id="nl" min="1" max="30" step="1" value="10"></div>
+    <div class="row" data-for="litter"><label for="drift"><span>drift with wind and current [m/s]</span><span class="v" id="driftV"></span></label><input type="range" id="drift" min="0" max="1" step="0.05" value="0.2"></div>
+    <div class="row" data-for="litter"><label for="fov"><span>camera's view [deg]</span><span class="v" id="fovV"></span></label><input type="range" id="fov" min="20" max="180" step="2" value="72"></div>
+    <label class="chk" data-for="litter"><input type="checkbox" id="respawn" checked> more drifts in from the east</label>
+    <div class="btns" data-for="litter"><button class="b" id="newlit">New litter</button></div>
+
+    <h2>The Otter</h2>
+    <div class="row"><label for="U"><span>U speed [m/s]</span><span class="v" id="UV"></span></label><input type="range" id="U" min="0.5" max="3" step="0.1" value="1.5"></div>
+    <div class="row"><label for="rmax"><span>r<sub>max</sub> turn rate [deg/s]</span><span class="v" id="rmaxV"></span></label><input type="range" id="rmax" min="2" max="20" step="1" value="10"></div>
+    <div class="row"><label for="tau"><span>turn lag τ [s] (not in the model)</span><span class="v" id="tauV"></span></label><input type="range" id="tau" min="0" max="4" step="0.1" value="0.6"></div>
+  </div>
+
+  <div class="charts">
+    <div class="grid2">
+      <div class="panel strip"><h3 id="cYt"></h3><canvas id="cY" class="chart"></canvas></div>
+      <div class="panel strip"><h3>Turn rate r [deg/s]: carried out, and planned</h3><canvas id="cR" class="chart"></canvas></div>
+    </div>
+    <div class="panel strip" id="cUbox" hidden><h3>Speed U [m/s]: carried out, and planned</h3><canvas id="cU" class="chart"></canvas></div>
+    <div class="grid2">
+      <div class="panel strip"><h3>Each plan's vote against its cost above the cheapest, with the curve exp(−ΔJ / T)</h3><canvas id="wchart"></canvas></div>
+      <div class="panel tablebox">
+        <h3 id="tabT">Now</h3>
+        <table aria-label="The present plan"><tbody id="tab"></tbody></table>
+        <div class="note" id="status" style="margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="panel tryit">
+  <h2>Things to try</h2>
+  <ul>
+    <li>Set <b>steer by</b> to the cheapest plan. Each new set of random plans has a different winner, and each winner keeps all of
+      its random wiggle: the amber plan on the map changes from step to step, and the planned turn rate jumps. Back on the weighted
+      average, the errors partly cancel. Some jitter is left, and it is visible in the turn-rate chart.</li>
+    <li>Change the temperature T and watch the vote chart. Low: only a few cheap plans count, the effective number of plans falls towards
+      one, and the jitter grows. High: all plans count about equally and the Otter responds late, or not at all.</li>
+    <li>Take M down to 10 and up to 5000. The time per replan grows in proportion, but the number of plans does not depend on the
+      horizon: try 60 s. Every plan is simulated on its own, which is why MPPI suits a GPU.</li>
+    <li>Set σ to almost nothing: the plans stay close to the current one, and the Otter cannot find its way round a corner in time.
+      Set α to 0: the wiggles are white noise, they cancel within a plan, and the plans hardly spread.</li>
+    <li>Drag a corner of the path onto land. Plans into shallow water are dropped, so the Otter cuts inside the corner and rejoins the
+      path as soon as it can.</li>
+    <li>Drop a buoy right ahead with <b>Buoy ahead</b>, or pause and drag it. The plans that reach its circle turn red and get no vote,
+      and the Otter passes just outside the 3.5 m it keeps from the buoy, then returns to the path.</li>
+    <li>Switch to <b>Collect litter</b>. The same few lines run with another cost. Set the second term to zero: the Otter still
+      explores, but no longer keeps what it has seen in view. Raise the drift and see how much it loses to the west.</li>
+    <li>In <b>Collect litter</b>, let it plan its speed too, and watch the speed chart: the plans' speeds wiggle and get their votes just
+      like the turn rates. In our runs it collected a little more, 7.3 of 10 pieces in 200 s on average against 6.5 with the turn rate alone.</li>
+  </ul>
+</div>
+
+<div class="panel about">
+  <h2>How it works</h2>
+  <p><b>The plans.</b> The current plan is a turn rate r<sub>k</sub> for each of N steps of Δt. MPPI draws M random wiggles, smooth over a
+    few steps, and adds them to it, each turn rate kept within ±r<sub>max</sub>:</p>
+  <div class="eq">r<sub>i,k</sub> = r<sub>k</sub> + ε<sub>i,k</sub>, &nbsp; ε<sub>i,k</sub> = α ε<sub>i,k−1</sub> + √(1−α²) σ ξ, &nbsp; ξ ~ 𝒩(0, 1)</div>
+  <p><b>The model</b> (kinematic, at a constant speed, forward Euler) predicts where each plan goes:</p>
+  <div class="eq">x<sup>n</sup><sub>k+1</sub> = x<sup>n</sup><sub>k</sub> + Δt U cos ψ<sub>k</sub>, &nbsp;
+    y<sup>n</sup><sub>k+1</sub> = y<sup>n</sup><sub>k</sub> + Δt U sin ψ<sub>k</sub>, &nbsp;
+    ψ<sub>k+1</sub> = ψ<sub>k</sub> + Δt r<sub>i,k</sub></div>
+  <p><b>The votes.</b> Each plan gets a cost J<sub>i</sub> and a weight, and the new plan is their weighted average. Weighting random
+    samples like this is called importance sampling. The Otter carries out the first step, the plan moves one step on, and it all
+    starts again from where the Otter really is:</p>
+  <div class="eq">w<sub>i</sub> ∝ exp(−(J<sub>i</sub> − min J) / T), &nbsp; r<sub>k</sub> = Σ<sub>i</sub> w<sub>i</sub> r<sub>i,k</sub></div>
+  <p><b>Following a path.</b> J<sub>i</sub> = Σ y<sub>e,k</sub><sup>2</sup> + λ Σ r<sub>i,k</sub><sup>2</sup>, with y<sub>e</sub> the distance
+    from the path ahead of the Otter. The path's corners are the symmetric polynomial transition curves of the LOS Guidance app. A plan into
+    water shallower than 1.5 m, within 3.5 m of a buoy or within d<sub>safe</sub> of the other Otter, predicted straight on, gets so high a cost that
+    its vote is nothing: it is dropped. The defaults: M = 1000, Δt = 0.5 s, N = 60 (30 s ahead), σ = 3 deg/s, α = 0.8, T = 40, λ = 0.05,
+    r<sub>max</sub> = 10 deg/s. The video looks 15 s ahead and turns at most 8 deg/s.</p>
+  <p><b>Collecting litter.</b> The same MPPI with another cost, in 1 s steps over 30 s: the water a plan would bring into the camera's view,
+    the more so if it has not been looked at lately; the litter it remembers, at the place its drift should have taken it, kept in view; a
+    soft wall round the area; and hard turns. Within 15 m of a piece in view, a simple pursuit takes over and steers it into the net between
+    the hulls, unless that would take it into shallow water. The Otter knows the drift only roughly and sees a piece only inside the camera's view, up to 30 m away.
+    The defaults are the video's: M = 150, σ = 4 deg/s, α = 0.8, T = 3.</p>
+  <p><b>Speed as a second input</b> (not in the video). Each plan then also has a speed U<sub>i,k</sub> for every step, the current plan's
+    plus a wiggle of its own, smooth in the same way with size σ<sub>U</sub>, and kept between 0.3 m/s and U<sub>max</sub>. The model moves
+    each step at that plan's speed, and a fifth term, A<sub>U</sub> Σ (U<sub>i,k</sub> − U)<sup>2</sup>, keeps it near the speed U. The new
+    speeds are the same weighted average as the turn rates. The Otter's speed follows with a lag of 1.5 s, which the model leaves out, and
+    the pursuit holds U. This is a simplified version of the planner in
+    <a href="https://arxiv.org/abs/2606.12019">MPPI-based Informative Trajectory Planning for Search and Capture of Drifting Targets with ASVs</a>,
+    which was tested in field trials with a USV.</p>
+  <p><b>The Otter</b>, a 2 m USV made by Maritime Robotics, is simulated here as the same kinematic model, every 20 ms, except that its
+    turn rate follows the commanded one with a first-order lag τ, which the model leaves out. The depths are those of the video's
+    digital twin of the strait, at low resolution; don't navigate by them.</p>
+  <p class="note">G. Williams, A. Aldrich and E. A. Theodorou, "Model predictive path integral control: from theory to parallel computation,"
+    <i>Journal of Guidance, Control, and Dynamics</i>, 40(2), 344–357, 2017.</p>
+  <p class="note">Sanjeev Ramkumar Sudha, Marija Popović and Erlend M. Coates, "MPPI-based informative trajectory planning for search and capture of
+    drifting targets with ASVs," accepted for publication in <i>IEEE Robotics and Automation Letters</i>.
+    <a href="https://arxiv.org/abs/2606.12019">arXiv:2606.12019</a>.</p>
+</div>
+
+<footer>Map: terrain and sea chart depth data © Kartverket (CC BY 4.0), roads © Statens vegvesen, NVDB (NLOD), buildings © OpenStreetMap
+  contributors (ODbL). More videos in the playlists <a href="https://www.youtube.com/playlist?list=PLcYnzy5eJtss">Guidance and Control</a>
+  and <a href="https://www.youtube.com/playlist?list=PLCppSPyphAW0">Autonomous Systems</a>. Source:
+  <a href="https://github.com/erlendcoates/autonomy-playground">github.com/erlendcoates/autonomy-playground</a>.</footer>
+
+<script type="module">
+import {Plot, css} from "../common/plot.js";
+
+// ── the place ─────────────────────────────────────────────────────────────────────────────────────────────────────
+const D2R = Math.PI / 180, H = 0.02;
+const MAP = {e0: -240, e1: 260, n0: -125, n1: 155, cols: 250, rows: 140, step: 2};    // m; depth.bin: 2 m cells, row 0 north
+const AREA = {n0: -18, n1: 62, e0: -25, e1: 75, cell: 2};                             // the video's search area
+const MIN_DEPTH = 1.5, R_KEEP = 3.5, R_VIEW = 30, R_CLOSE = 15, NET_X = 0.95, NET_W = 0.27, HIT = 1e6;
+const DEF_LOOP = () => [[40, -20], [48, 60], [30, 125], [-15, 150], [-35, 90], [-10, 30]];
+let depth = null;
+function depthAt(n, e) {
+  if (!depth) return 99;                        // depth.bin still loading: all water
+  const c = (e - MAP.e0) / MAP.step | 0, r = (MAP.n1 - n) / MAP.step | 0;
+  return c < 0 || r < 0 || c >= MAP.cols || r >= MAP.rows ? 0 : depth[r * MAP.cols + c] * 0.1;
+}
+const maps = {light: new Image(), dark: new Image()};
+maps.light.src = "map_light.jpg"; maps.dark.src = "map_dark.jpg";
+const isDark = () => (document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")) === "dark";
+
+// ── the path: straight legs and polynomial transition curves, as the LOS Guidance app (Kobryń, 2014) ─────────────
+let wps = DEF_LOOP(), SEG = [], PL = 1;
+function buildPath() {
+  const n = wps.length, dirs = [], lens = [];
+  for (let i = 0; i < n; i++) {
+    const a = wps[i], b = wps[(i + 1) % n], L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1e-9;
+    dirs.push([(b[0] - a[0]) / L, (b[1] - a[1]) / L]); lens.push(L);
+  }
+  const cs = [];
+  for (let i = 0; i < n; i++) {
+    const d1 = dirs[(i - 1 + n) % n], d2 = dirs[i], th = Math.acos(Math.max(-1, Math.min(1, d1[0] * d2[0] + d1[1] * d2[1])));
+    if (P.Rmin <= 0 || th < 1e-6 || th > Math.PI - 1e-3) { cs.push(null); continue; }
+    const u = th / 2, Lt = Math.min(3 * P.Rmin * Math.tan(u) / (2 * Math.cos(u)), lens[(i - 1 + n) % n] / 2, lens[i] / 2);
+    cs.push({u, d1, d2, Lt});
+  }
+  const X = [], push = (x, y) => X.push([x, y]);
+  for (let i = 0; i < n; i++) {
+    const c = cs[i], w = wps[i];
+    if (c) {
+      const xK = 2 * c.Lt * Math.cos(c.u), k = xK * Math.tan(c.u);
+      let cx = c.d1[0] + c.d2[0], cy = c.d1[1] + c.d2[1]; const cm = Math.hypot(cx, cy); cx /= cm; cy /= cm;
+      const dt = c.d1[0] * cx + c.d1[1] * cy; let ax = c.d1[0] - dt * cx, ay = c.d1[1] - dt * cy; const am = Math.hypot(ax, ay) || 1; ax /= am; ay /= am;
+      const P0 = [w[0] - c.Lt * c.d1[0], w[1] - c.Lt * c.d1[1]];
+      for (let j = 0; j <= 12; j++) { const q = j / 12, f = q - 2 * q ** 3 + q ** 4; push(P0[0] + k * f * ax + xK * q * cx, P0[1] + k * f * ay + xK * q * cy); }
+    } else push(w[0], w[1]);
+  }
+  SEG = []; PL = 0;
+  X.forEach((a, i) => {
+    const b = X[(i + 1) % X.length], tn = b[0] - a[0], te = b[1] - a[1], L = Math.hypot(tn, te);
+    if (L < 1e-6) return;
+    SEG.push({an: a[0], ae: a[1], tn: tn / L, te: te / L, L, s0: PL}); PL += L;
+  });
+}
+function nearest(n, e) {
+  let best = Infinity, si = 0, su = 0, sg = 1;
+  SEG.forEach((s, i) => {
+    const wn = n - s.an, we = e - s.ae, u = Math.min(Math.max(wn * s.tn + we * s.te, 0), s.L);
+    const d2 = (wn - u * s.tn) ** 2 + (we - u * s.te) ** 2;
+    if (d2 < best) { best = d2; si = i; su = u; sg = s.tn * we - s.te * wn >= 0 ? 1 : -1; }
+  });
+  return {i: si, u: su, d: sg * Math.sqrt(best)};
+}
+const offPath = (n, e) => nearest(n, e).d;
+function pointAt(s) {
+  s = ((s % PL) + PL) % PL;
+  let lo = 0; for (let i = 0; i < SEG.length; i++) if (SEG[i].s0 <= s) lo = i;
+  const g = SEG[lo], u = s - g.s0;
+  return {n: g.an + u * g.tn, e: g.ae + u * g.te, tn: g.tn, te: g.te};
+}
+function segsAhead(n, e, len) {                 // the path from the point nearest (n, e), `len` m on: sailing it backwards scores badly
+  const q = nearest(n, e), out = [];
+  let si = q.i, su = q.u;
+  for (let left = len, g = 0; left > 0 && g < 400; si = (si + 1) % SEG.length, su = 0, g++) {
+    const s = SEG[si], L = Math.min(s.L - su, left);
+    if (L > 1e-9) out.push(s.an + su * s.tn, s.ae + su * s.te, s.tn, s.te, L);
+    left -= L;
+  }
+  return new Float64Array(out);
+}
+
+// ── the settings: each task keeps its own, the video's by default ─────────────────────────────────────────────────
+const MLIST = [10, 30, 100, 150, 300, 1000, 2000, 3000, 5000];
+const DEF = {
+  path: {Ms: 5, T_h: 30, sig: 3, alp: 0.8, Ts: Math.log10(40), DT: 0.5},
+  litter: {Ms: 3, T_h: 30, sig: 4, alp: 0.8, Ts: Math.log10(3), DT: 1.0},
+};
+const P = {mode: "path", ...structuredClone(DEF.path), steer: "avg", lam: 0.05, Rmin: 10, other: true, dsafe: 6, Ae: 1, At: 6, Ab: 0.3, Ap: 0.15,
+           nl: 10, drift: 0.2, fov: 72, respawn: true, U: 1.5, rmax: 10, tau: 0.6, scale: 2, view: "task",
+           two: false, sigU: 0.3, Umax: 2.5, Av: 0.5};
+const U_MIN = 0.3, TAU_U = 1.5;                  // m/s: the slowest a plan may go; s: how fast the Otter's speed follows (not in the model)
+const saved = {path: {}, litter: {}};
+const TASK_KEYS = ["Ms", "T_h", "sig", "alp", "Ts"];
+
+// ── MPPI: the core is the video's Python, line by line ────────────────────────────────────────────────────────────
+let G = null;                                   // the arrays of this M and N
+function arrays() {
+  const M = MLIST[P.Ms], N = Math.max(2, Math.round(P.T_h / P.DT));
+  if (G && G.M === M && G.N === N) return G;
+  const old = G;
+  G = {M, N, R: new Float64Array(M * N), V: new Float64Array(M * N), planU: new Float64Array(N).fill(P.U), newU: new Float64Array(N).fill(P.U), u0: P.U, pts: new Float64Array(M * (N + 1) * 3), J: new Float64Array(M), w: new Float64Array(M), hit: new Int32Array(M),
+       plan: new Float64Array(N), new_: new Float64Array(N), pa: new Float64Array((N + 1) * 2), ib: 0, ess: 0, ms: 0, dropped: 0, stamp: null, Jt: [0, 0, 0, 0]};
+  if (old) for (let k = 0; k < Math.min(N, old.N); k++) { G.plan[k] = old.plan[k]; G.planU[k] = old.planU[k]; }
+  return G;
+}
+let spare = null;
+function randn() {
+  if (spare !== null) { const v = spare; spare = null; return v; }
+  let u, v, s;
+  do { u = 2 * Math.random() - 1; v = 2 * Math.random() - 1; s = u * u + v * v; } while (s >= 1 || s === 0);
+  const f = Math.sqrt(-2 * Math.log(s) / s);
+  spare = v * f;
+  return u * f;
+}
+
+function mppi(eta, costOf) {
+  const tic = performance.now(), g = arrays(), {M, N, R, V, pts, J, w} = g, DT = P.DT, U = P.U, rmax = P.rmax, sig = P.sig, alp = P.alp, c = Math.sqrt(1 - alp * alp);
+  const two = P.mode === "litter" && P.two, sigU = P.sigU, umax = P.Umax;
+  if (!two) g.planU.fill(U);
+  // M random plans around the current one: a turn rate for each step and, with speed as an input, a speed too
+  for (let i = 0; i < M; i++) {
+    let e = randn() * sig, eu = two ? randn() * sigU : 0;
+    for (let k = 0; k < N; k++) {
+      if (k) { e = alp * e + c * sig * randn(); if (two) eu = alp * eu + c * sigU * randn(); }
+      const r = g.plan[k] + e, u = g.planU[k] + eu;
+      R[i * N + k] = r > rmax ? rmax : r < -rmax ? -rmax : r;
+      V[i * N + k] = two ? (u > umax ? umax : u < U_MIN ? U_MIN : u) : U;
+    }
+  }
+  // simulate them all with the model
+  for (let i = 0; i < M; i++) {
+    let n = eta[0], e = eta[1], psi = eta[2], o = i * (N + 1) * 3;
+    pts[o] = n; pts[o + 1] = e; pts[o + 2] = psi;
+    for (let k = 0; k < N; k++) {
+      const u = V[i * N + k];
+      n += DT * u * Math.cos(psi); e += DT * u * Math.sin(psi); psi += DT * R[i * N + k] * D2R;
+      o += 3; pts[o] = n; pts[o + 1] = e; pts[o + 2] = psi;
+    }
+  }
+  // score them
+  costOf(g);
+  // cheap plans weigh more
+  let jmin = Infinity, ib = 0;
+  for (let i = 0; i < M; i++) if (J[i] < jmin) { jmin = J[i]; ib = i; }
+  const T = 10 ** P.Ts;
+  let sum = 0, sum2 = 0, dropped = 0;
+  for (let i = 0; i < M; i++) { const v = Math.exp(-(J[i] - jmin) / T); w[i] = v; sum += v; if (g.hit[i] >= 0) dropped++; }
+  for (let i = 0; i < M; i++) { w[i] /= sum; sum2 += w[i] * w[i]; }
+  // the weighted average, or the cheapest plan
+  if (P.steer === "avg") {
+    g.new_.fill(0); g.newU.fill(0);
+    for (let i = 0; i < M; i++) { const v = w[i], o = i * N; if (v < 1e-12) continue; for (let k = 0; k < N; k++) { g.new_[k] += v * R[o + k]; g.newU[k] += v * V[o + k]; } }
+  } else for (let k = 0; k < N; k++) { g.new_[k] = R[ib * N + k]; g.newU[k] = V[ib * N + k]; }
+  // the plan it steers by, on the map; next time it starts from this, a step on
+  let n = eta[0], e = eta[1], psi = eta[2];
+  g.pa[0] = n; g.pa[1] = e;
+  for (let k = 0; k < N; k++) {
+    n += DT * g.newU[k] * Math.cos(psi); e += DT * g.newU[k] * Math.sin(psi); psi += DT * g.new_[k] * D2R;
+    g.pa[2 * k + 2] = n; g.pa[2 * k + 3] = e;
+  }
+  for (let k = 0; k < N - 1; k++) { g.plan[k] = g.new_[k + 1]; g.planU[k] = g.newU[k + 1]; }
+  g.plan[N - 1] = g.new_[N - 1]; g.planU[N - 1] = g.newU[N - 1]; g.u0 = g.newU[0];
+  g.ib = ib; g.jmin = jmin; g.ess = 1 / sum2; g.dropped = dropped; g.ms = performance.now() - tic;
+  return g.new_[0];
+}
+
+// ── following a path ──────────────────────────────────────────────────────────────────────────────────────────────
+function otherAt(t) {                           // the other Otter: the loop the other way round, 4 m to its own starboard
+  const s = S.otherS - 1.2 * t, a = pointAt(s), b = pointAt(s - 1.2);
+  const tn = b.n - a.n, te = b.e - a.e, L = Math.hypot(tn, te) || 1;
+  const un = tn / L, ue = te / L;               // its direction of travel; its starboard is (−ue, un) in (north, east)
+  return {n: a.n - 4 * ue, e: a.e + 4 * un, vn: 1.2 * un, ve: 1.2 * ue, psi: Math.atan2(ue, un)};
+}
+function costPath(g) {
+  const {M, N, R, pts, J, hit} = g, DT = P.DT, lam = P.lam, a = segsAhead(S.n, S.e, P.U * N * DT + 30), na = a.length;
+  const oth = P.other ? otherAt(S.t) : null, d2o = P.dsafe ** 2, r2 = R_KEEP ** 2, buoys = S.buoys;
+  for (let i = 0; i < M; i++) {
+    let Jp = 0, Jt = 0, h = -1, o = i * (N + 1) * 3;
+    for (let k = 0; k < N; k++) {
+      o += 3;
+      const n = pts[o], e = pts[o + 1], r = R[i * N + k];
+      let best = Infinity;
+      for (let q = 0; q < na; q += 5) {
+        const wn = n - a[q], we = e - a[q + 1];
+        let u = wn * a[q + 2] + we * a[q + 3];
+        u = u < 0 ? 0 : u > a[q + 4] ? a[q + 4] : u;
+        const dn = wn - u * a[q + 2], de = we - u * a[q + 3], d2 = dn * dn + de * de;
+        if (d2 < best) best = d2;
+      }
+      Jp += best; Jt += lam * r * r;
+      if (h < 0) {
+        if (depthAt(n, e) < MIN_DEPTH) h = k;
+        else if (oth) { const s = (k + 1) * DT, dn = n - oth.n - oth.vn * s, de = e - oth.e - oth.ve * s; if (dn * dn + de * de < d2o) h = k; }
+        if (h < 0) for (const b of buoys) if ((n - b.n) ** 2 + (e - b.e) ** 2 < r2) { h = k; break; }
+      }
+    }
+    hit[i] = h; J[i] = Jp + Jt + (h >= 0 ? HIT : 0);
+    if (i === 0) g.Jt = [Jp, Jt];
+  }
+}
+
+// ── collecting litter: the video's four terms ─────────────────────────────────────────────────────────────────────
+const GRID = {cols: Math.round((AREA.e1 - AREA.e0) / AREA.cell), rows: Math.round((AREA.n1 - AREA.n0) / AREA.cell)};
+const CHI = 275 * D2R, GAMMA = 1 / 120;
+function spawn(east) {
+  const pad = 8, n = AREA.n0 + pad + Math.random() * (AREA.n1 - AREA.n0 - 2 * pad);
+  const e = east ? AREA.e1 + 4 : AREA.e0 + pad + Math.random() * (AREA.e1 - AREA.e0 - 2 * pad);
+  return {n, e, lee: 0.7 + 0.6 * Math.random(), kind: Math.floor(Math.random() * 5), az: Math.random() * 6.28, id: S.nid++, caught: -1};
+}
+function costLitter(g) {
+  const {M, N, R, V, pts, J, hit} = g, v = S.v, {cols, rows} = GRID, c = AREA.cell, cosf2 = Math.cos(P.fov * D2R / 2) ** 2, rv2 = R_VIEW * R_VIEW;
+  if (!g.stamp || g.stamp.length !== v.length) g.stamp = new Int32Array(v.length);
+  const st = g.stamp, tl = S.tl, rm = P.rmax, DT = P.DT, half = P.fov * D2R / 2;
+  let stamp = (S.stampN || 0);
+  for (let i = 0; i < M; i++) {
+    stamp++;
+    let Ce = 0, Ct = 0, Cb = 0, Cp = 0, Cv = 0, h = -1;
+    for (let k = 0; k < N; k++) {
+      const o = (i * (N + 1) + k + 1) * 3, X = pts[o], Y = pts[o + 1], psi = pts[o + 2], r = R[i * N + k] / rm, du = V[i * N + k] - P.U;
+      Cp += r * r; Cv += du * du;
+      const dm = Math.min(X - AREA.n0, AREA.n1 - X, Y - AREA.e0, AREA.e1 - Y);
+      Cb += Math.log1p(Math.exp(Math.min(20, Math.max(-20, 6 - dm))));
+      if (h < 0 && depthAt(X, Y) < MIN_DEPTH) h = k;
+      if (!(k % 2)) continue;                   // every second step, as the video's
+      const cp = Math.cos(psi), sp = Math.sin(psi);
+      const c0 = Math.max(0, Math.floor((Y - R_VIEW - AREA.e0) / c)), c1 = Math.min(cols - 1, Math.floor((Y + R_VIEW - AREA.e0) / c));
+      const r0 = Math.max(0, Math.floor((X - R_VIEW - AREA.n0) / c)), r1 = Math.min(rows - 1, Math.floor((X + R_VIEW - AREA.n0) / c));
+      for (let rr = r0; rr <= r1; rr++) {
+        const dx = AREA.n0 + (rr + 0.5) * c - X;
+        for (let cc = c0; cc <= c1; cc++) {
+          const q = rr * cols + cc;
+          if (st[q] === stamp) continue;
+          const dy = AREA.e0 + (cc + 0.5) * c - Y, d2 = dx * dx + dy * dy, al = dx * cp + dy * sp;
+          if (d2 < rv2 && al > 0 && al * al > cosf2 * d2) { st[q] = stamp; Ce += v[q]; }
+        }
+      }
+      const sf = (k + 1) * DT;
+      for (const t of tl) {
+        const px = t.n + t.vn * sf - X, py = t.e + t.ve * sf - Y, dd = px * px + py * py;
+        if (dd >= rv2) continue;
+        let b = Math.atan2(py, px) - psi; b = ((b + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+        if (Math.abs(b) < half) Ct += Math.exp(-dd / 400 - b * b / 0.5);
+      }
+    }
+    Ce = -100 * Ce / v.length;
+    hit[i] = h;
+    J[i] = P.Ae * Ce - P.At * Ct + P.Ab * Cb + P.Ap * Cp + (P.two ? P.Av * Cv : 0) + (h >= 0 ? HIT : 0);
+  }
+  S.stampN = stamp;
+}
+function camera5Hz() {
+  const {cols, rows} = GRID, c = AREA.cell, v = S.v, cp = Math.cos(S.psi), sp = Math.sin(S.psi), cosf2 = Math.cos(P.fov * D2R / 2) ** 2, rv2 = R_VIEW * R_VIEW;
+  for (let q = 0; q < v.length; q++) v[q] = Math.min(1, v[q] + GAMMA * 0.2);
+  let looked = 0;
+  for (let rr = 0; rr < rows; rr++) for (let cc = 0; cc < cols; cc++) {
+    const q = rr * cols + cc, dx = AREA.n0 + (rr + 0.5) * c - S.n, dy = AREA.e0 + (cc + 0.5) * c - S.e, d2 = dx * dx + dy * dy, al = dx * cp + dy * sp;
+    if (d2 < rv2 && al > 0 && al * al > cosf2 * d2) v[q] = 0;
+    looked += 1 - v[q];
+  }
+  S.looked = looked / v.length;
+  const est = () => { const a = CHI + 0.15 * randn(); return [Math.cos(a) * P.drift, Math.sin(a) * P.drift]; };
+  const see = (p) => {
+    const dx = p.n - S.n, dy = p.e - S.e, d2 = dx * dx + dy * dy;
+    if (d2 >= rv2) return false;
+    let b = Math.atan2(dy, dx) - S.psi; b = ((b + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+    return Math.abs(b) < P.fov * D2R / 2;
+  };
+  const det = [];
+  for (const p of S.lit) if (p.caught < 0 && see(p)) {
+    const [vn, ve] = est();
+    S.tracks.set(p.id, {n: p.n, e: p.e, vn, ve, t: S.t});
+    det.push(p);
+  }
+  for (const [id, tr] of S.tracks) {
+    const seen = det.some((p) => p.id === id), alive = S.lit.some((p) => p.id === id && p.caught < 0);
+    if (!alive) { S.tracks.delete(id); continue; }
+    if (!seen) {
+      const px = tr.n + tr.vn * (S.t - tr.t), py = tr.e + tr.ve * (S.t - tr.t);
+      if (see({n: px, e: py}) && S.t - tr.t > 2) S.tracks.delete(id);    // it should be in view here, and it isn't
+    }
+  }
+  if (S.tgt && !det.includes(S.tgt)) S.tgt = null;
+  if (!S.tgt && det.length) {
+    let bd = Infinity, bp = null;
+    for (const p of det) {
+      if ((p.skip || 0) > S.t || depthAt(p.n, p.e) < MIN_DEPTH) continue;    // not one in shallow water
+      const d = Math.hypot(p.n - S.n, p.e - S.e); if (d < bd) { bd = d; bp = p; }
+    }
+    if (bd < R_CLOSE) S.tgt = bp;
+  }
+}
+function stepLitter(h) {
+  const cx = Math.cos(CHI), sx = Math.sin(CHI);
+  for (const p of S.lit) {
+    if (p.caught >= 0) continue;
+    p.n += h * p.lee * P.drift * cx; p.e += h * p.lee * P.drift * sx;
+    const dn = p.n - S.n, de = p.e - S.e, al = dn * Math.cos(S.psi) + de * Math.sin(S.psi), la = de * Math.cos(S.psi) - dn * Math.sin(S.psi);
+    if (al > 0 && al < NET_X && Math.abs(la) < NET_W) { p.caught = S.t; p.slot = S.nCaught++; if (S.tgt === p) S.tgt = null; S.tracks.delete(p.id); }
+    else if (p.n < AREA.n0 - 5 || p.n > AREA.n1 + 5 || p.e < AREA.e0 - 5 || p.e > AREA.e1 + 5) { p.gone = true; S.nGone++; S.tracks.delete(p.id); if (S.tgt === p) S.tgt = null; }
+  }
+  S.lit = S.lit.filter((p) => !p.gone);
+  const afloat = S.lit.filter((p) => p.caught < 0).length;
+  if (P.respawn && afloat < P.nl && S.t >= S.tSpawn) { S.lit.push(spawn(true)); S.tSpawn = S.t + 6; }
+}
+
+// ── the simulation ────────────────────────────────────────────────────────────────────────────────────────────────
+const S = {buoys: [{n: 44, e: 60}]};                  // just inside the path, below its northern corner
+function reset() {
+  G = null; arrays();
+  Object.assign(S, {t: 0, r: 0, rcmd: 0, u: P.U, ucmd: P.U, tNext: 0, hist: [], trail: [], plans: [], tLog: -1, tTrail: -1, aground: false, closest: Infinity, tCam: 0});
+  if (P.mode === "path") {
+    const q = pointAt(10);
+    S.n = q.n + 8 * (-q.te); S.e = q.e + 8 * q.tn; S.psi = Math.atan2(q.te, q.tn);
+    if (S.otherS === undefined) S.otherS = PL * 0.45;
+  } else {
+    Object.assign(S, {n: -13, e: -20, psi: 45 * D2R, v: new Float64Array(GRID.cols * GRID.rows).fill(1), tracks: new Map(), tgt: null, tl: [], lit: [], nCaught: 0, nGone: 0, nid: 0, tSpawn: 0, looked: 0, stampN: 0});
+    for (let i = 0; i < P.nl; i++) S.lit.push(spawn(false));
+  }
+  replan();
+}
+function replan() {
+  const eta = [S.n, S.e, S.psi];
+  if (P.mode === "path") {
+    const r0 = mppi(eta, costPath);
+    if (!S.aground) S.rcmd = r0;
+    const g = G, ye = [], rr = [];
+    for (let k = 0; k <= g.N; k++) ye.push(offPath(g.pa[2 * k], g.pa[2 * k + 1]));
+    for (let k = 0; k < g.N; k++) rr.push(g.new_[k]);
+    S.plans.push({t0: S.t, ye, rr});
+    if (S.plans.length > 4) S.plans.shift();
+  } else {
+    S.tl = [...S.tracks.values()].map((t) => ({n: t.n + t.vn * (S.t - t.t), e: t.e + t.ve * (S.t - t.t), vn: t.vn, ve: t.ve}));
+    const r0 = mppi(eta, costLitter);
+    if (!S.tgt) S.rcmd = r0;
+    const g = G, rr = [];
+    for (let k = 0; k < g.N; k++) rr.push(g.new_[k]);
+    S.ucmd = S.tgt ? P.U : g.u0;                 // the pursuit holds speed U
+    S.plans.push({t0: S.t, rr, uu: Array.from(g.newU), ye: []});
+    if (S.plans.length > 4) S.plans.shift();
+  }
+  S.tNext = S.t + P.DT;
+}
+function integrate(h) {
+  if (P.mode === "litter" && S.tgt && depthAt(S.n + 4 * Math.cos(S.psi), S.e + 4 * Math.sin(S.psi)) < MIN_DEPTH) {
+    S.tgt.skip = S.t + 10; S.tgt = null;         // the pursuit would take it into shallow water: MPPI, which keeps out, takes over
+    S.rcmd = G.new_[0];
+  }
+  if (P.mode === "litter" && S.tgt) {            // a simple pursuit, close in
+    let b = Math.atan2(S.tgt.e - S.e, S.tgt.n - S.n) - S.psi; b = ((b + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+    S.rcmd = Math.max(-P.rmax, Math.min(P.rmax, b / D2R));
+  }
+  S.r = P.tau > 0 ? S.r + h * (S.rcmd * D2R - S.r) / P.tau : S.rcmd * D2R;
+  if (!(P.mode === "litter" && P.two) || S.tgt) S.ucmd = P.U;
+  S.u += h * (S.ucmd - S.u) / TAU_U;
+  if (!S.aground) {
+    S.n += h * S.u * Math.cos(S.psi); S.e += h * S.u * Math.sin(S.psi); S.psi += h * S.r;
+    if (depthAt(S.n, S.e) < 0.2) S.aground = true;
+  }
+  S.t += h;
+  if (P.mode === "path" && P.other) { const o = otherAt(S.t); S.closest = Math.min(S.closest, Math.hypot(S.n - o.n, S.e - o.e)); }
+  if (P.mode === "litter") {
+    if (S.t >= S.tCam) { camera5Hz(); S.tCam = S.t + 0.2; }
+    stepLitter(h);
+  }
+  if (S.t - S.tLog >= 0.1 - 1e-9) {
+    S.tLog = S.t;
+    S.hist.push({t: S.t, ye: P.mode === "path" ? offPath(S.n, S.e) : 100 * S.looked, rc: S.rcmd, r: S.r / D2R, u: S.u, uc: S.ucmd});
+    while (S.hist.length && S.hist[0].t < S.t - 40) S.hist.shift();
+  }
+  if (S.t - S.tTrail >= 0.5 - 1e-9) { S.tTrail = S.t; S.trail.push([S.n, S.e]); if (S.trail.length > 1800) S.trail.shift(); }
+}
+function advance(dt) {
+  for (let left = dt; left > 1e-9; left -= H) {
+    if (S.t >= S.tNext - 1e-9) replan();
+    integrate(Math.min(H, left));
+  }
+}
+function stepOnce() { while (S.t < S.tNext - 1e-9) integrate(Math.min(H, S.tNext - S.t)); replan(); }
+
+// ── drawing ───────────────────────────────────────────────────────────────────────────────────────────────────────
+const map = document.getElementById("map"), g2 = map.getContext("2d");
+const view = {cn: 20, ce: 60, s: 5, W: 1, Hh: 1};
+let hover = -1;
+function fit(c) {
+  const d = window.devicePixelRatio || 1, w = c.clientWidth || 1, h = c.clientHeight || 1;
+  if (c.width !== Math.round(w * d) || c.height !== Math.round(h * d)) { c.width = Math.round(w * d); c.height = Math.round(h * d); }
+  c.getContext("2d").setTransform(d, 0, 0, d, 0, 0);
+  return [w, h];
+}
+const W2S = (n, e) => [view.W / 2 + (e - view.ce) * view.s, view.Hh / 2 - (n - view.cn) * view.s];
+const S2W = (X, Y) => [view.cn - (Y - view.Hh / 2) / view.s, view.ce + (X - view.W / 2) / view.s];
+function setCamera() {
+  let n0, n1, e0, e1;
+  if (P.view === "follow") {
+    if (drag) return;
+    const reach = Math.max(P.T_h * P.U, 8), ahead = 0.35 * reach, s = Math.min(view.W, view.Hh * 1.4) / (2.4 * reach + 14);
+    view.s = s; view.cn += (S.n + ahead * Math.cos(S.psi) - view.cn) * 0.08; view.ce += (S.e + ahead * Math.sin(S.psi) - view.ce) * 0.08;
+    return;
+  }
+  if (P.view === "all") { n0 = -60; n1 = 85; e0 = -180; e1 = 240; }
+  else if (P.mode === "litter") { n0 = AREA.n0 - 18; n1 = AREA.n1 + 18; e0 = AREA.e0 - 18; e1 = AREA.e1 + 18; }
+  else {
+    if (drag) return;                           // the view holds still under a drag
+    const ns = wps.map((p) => p[0]), es = wps.map((p) => p[1]);
+    n0 = Math.min(...ns, S.n) - 26; n1 = Math.max(...ns, S.n) + 26; e0 = Math.min(...es, S.e) - 26; e1 = Math.max(...es, S.e) + 26;
+  }
+  view.cn = (n0 + n1) / 2; view.ce = (e0 + e1) / 2; view.s = Math.min(view.W / (e1 - e0), view.Hh / (n1 - n0));
+}
+function hex(c) {
+  c = c.trim();
+  if (c[0] === "#") { if (c.length === 4) c = "#" + [...c.slice(1)].map((x) => x + x).join(""); return [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16)); }
+  const m = c.match(/[\d.]+/g);
+  return m ? m.slice(0, 3).map(Number) : [128, 128, 128];
+}
+let otterNet = false;
+function drawOtter(n, e, psi, s, hullCol, deckCol) {
+  const [X, Y] = W2S(n, e), L = 2.0, B = 1.08, w = 0.27;
+  const sc = Math.max(s, 7);                     // never smaller than about 14 px long
+  g2.save(); g2.translate(X, Y); g2.rotate(psi); g2.scale(sc, sc);
+  if (otterNet) {
+    g2.strokeStyle = css("--net"); g2.lineWidth = 0.05;
+    g2.beginPath(); g2.moveTo(-0.27, -0.88); g2.lineTo(0.27, -0.88); g2.lineTo(0.1, 0.32); g2.lineTo(-0.1, 0.32); g2.closePath(); g2.stroke();
+  }
+  g2.fillStyle = hullCol;
+  for (const side of [-1, 1]) {
+    const c = side * (B / 2 - w / 2);
+    g2.beginPath(); g2.moveTo(c - w / 2, L / 2); g2.lineTo(c - w / 2, -L / 2 + 0.3); g2.quadraticCurveTo(c, -L / 2 - 0.05, c + w / 2, -L / 2 + 0.3); g2.lineTo(c + w / 2, L / 2); g2.closePath(); g2.fill();
+  }
+  g2.fillStyle = deckCol; g2.fillRect(-0.38, -0.5, 0.76, 1.0);
+  g2.restore();
+}
+const LIT_COL = ["#4aa8e8", "#f26a1b", "#e9edf2", "#ffd21f", "#6fd36b"];
+function drawLitter(s) {
+  const dark = isDark();
+  for (const p of S.lit) {
+    let n = p.n, e = p.e, z = 1;
+    if (p.caught >= 0) {
+      const u = Math.min((S.t - p.caught) / 0.8, 1);
+      const sl = p.slot % 8, xb = 0.55 - 0.11 * sl, zb = (sl % 2 ? 1 : -1) * 0.09;
+      const nb = S.n + xb * Math.cos(S.psi) - zb * Math.sin(S.psi), eb = S.e + xb * Math.sin(S.psi) + zb * Math.cos(S.psi);
+      if (u >= 1) { if (s < 12) continue; n = nb; e = eb; } else { n = p.n + (nb - p.n) * u; e = p.e + (eb - p.e) * u; }
+      z = 1;
+    }
+    const [X, Y] = W2S(n, e), len = Math.max(0.36 * s, p.caught >= 0 ? 0 : 8), wd = Math.max(0.12 * s, p.caught >= 0 ? 0 : 3.6);
+    g2.save(); g2.translate(X, Y); g2.rotate(p.az);
+    g2.fillStyle = dark ? LIT_COL[p.kind] : (p.kind === 2 ? "#ffffff" : LIT_COL[p.kind]);
+    g2.strokeStyle = dark ? "#0a0f16" : "#22303d"; g2.lineWidth = 0.8;
+    g2.beginPath(); g2.roundRect(-len / 2, -wd / 2, len, wd, wd / 2); g2.fill(); if (p.caught < 0) g2.stroke();
+    g2.restore();
+  }
+}
+let unseen = null;
+function drawArea() {
+  const {cols, rows} = GRID, v = S.v, s = view.s, un = hex(css("--unseen"));
+  if (!unseen) { unseen = document.createElement("canvas"); unseen.width = cols; unseen.height = rows; }
+  const ug = unseen.getContext("2d"), im = ug.createImageData(cols, rows);       // one pixel a cell, row 0 at the north edge, drawn smoothed
+  for (let rr = 0; rr < rows; rr++) for (let cc = 0; cc < cols; cc++) {
+    const o = ((rows - 1 - rr) * cols + cc) * 4;
+    im.data[o] = un[0]; im.data[o + 1] = un[1]; im.data[o + 2] = un[2]; im.data[o + 3] = 112 * v[rr * cols + cc];
+  }
+  ug.putImageData(im, 0, 0);
+  const [ux, uy] = W2S(AREA.n1, AREA.e0);
+  g2.imageSmoothingEnabled = true;
+  g2.drawImage(unseen, ux, uy, cols * AREA.cell * s, rows * AREA.cell * s);
+  const [ax, ay] = W2S(AREA.n1, AREA.e0), [bx, by] = W2S(AREA.n0, AREA.e1);
+  g2.strokeStyle = css("--muted"); g2.lineWidth = 1; g2.setLineDash([5, 4]); g2.strokeRect(ax, ay, bx - ax, by - ay); g2.setLineDash([]);
+  // the camera's view
+  const [OX, OY] = W2S(S.n, S.e), R = R_VIEW * s, h = P.fov * D2R / 2;
+  g2.fillStyle = css("--best"); g2.globalAlpha = 0.13; g2.beginPath(); g2.moveTo(OX, OY);
+  g2.arc(OX, OY, R, S.psi - h - Math.PI / 2, S.psi + h - Math.PI / 2); g2.closePath(); g2.fill();
+  g2.globalAlpha = 0.8; g2.strokeStyle = css("--best"); g2.lineWidth = 1.2; g2.stroke(); g2.globalAlpha = 1;
+  // what it remembers
+  g2.strokeStyle = css("--best"); g2.lineWidth = 1.6;
+  for (const t of S.tl) { const [X, Y] = W2S(t.n, t.e); g2.beginPath(); g2.arc(X, Y, 7, 0, 7); g2.stroke(); }
+  if (S.tgt) { const [X, Y] = W2S(S.tgt.n, S.tgt.e); g2.lineWidth = 1.5; g2.setLineDash([3, 3]); g2.beginPath(); g2.moveTo(OX, OY); g2.lineTo(X, Y); g2.stroke(); g2.setLineDash([]); }
+}
+function drawMap() {
+  const [W, Hh] = fit(map);
+  view.W = W; view.Hh = Hh;
+  setCamera();
+  const s = view.s, g = G;
+  g2.fillStyle = css("--water"); g2.fillRect(0, 0, W, Hh);
+  const img = isDark() ? maps.dark : maps.light;
+  if (img.complete && img.naturalWidth) {
+    const [X0, Y0] = W2S(MAP.n1, MAP.e0), [X1, Y1] = W2S(MAP.n0, MAP.e1);
+    g2.drawImage(img, X0, Y0, X1 - X0, Y1 - Y0);
+  }
+  if (P.mode === "litter") drawArea();
+  if (P.mode === "path") {
+    g2.strokeStyle = css("--truth"); g2.lineWidth = 2; g2.globalAlpha = 0.85; g2.beginPath();
+    SEG.forEach((q, i) => { const [X, Y] = W2S(q.an, q.ae); i ? g2.lineTo(X, Y) : g2.moveTo(X, Y); }); g2.closePath(); g2.stroke();
+    g2.fillStyle = css("--truth");
+    for (let d = 15; d < PL; d += 60) {
+      const q = pointAt(d), [X, Y] = W2S(q.n, q.e), a = Math.atan2(-q.tn, q.te);
+      g2.save(); g2.translate(X, Y); g2.rotate(a); g2.beginPath(); g2.moveTo(7, 0); g2.lineTo(-5, -5); g2.lineTo(-5, 5); g2.closePath(); g2.fill(); g2.restore();
+    }
+    g2.globalAlpha = 0.7; g2.strokeStyle = css("--muted"); g2.lineWidth = 1; g2.setLineDash([5, 4]); g2.beginPath();
+    wps.forEach((p, i) => { const [X, Y] = W2S(p[0], p[1]); i ? g2.lineTo(X, Y) : g2.moveTo(X, Y); }); g2.closePath(); g2.stroke(); g2.setLineDash([]); g2.globalAlpha = 1;
+    for (const p of wps) { const [X, Y] = W2S(p[0], p[1]); g2.fillStyle = css("--panel"); g2.strokeStyle = css("--truth"); g2.lineWidth = 1.5; g2.fillRect(X - 5, Y - 5, 10, 10); g2.strokeRect(X - 5, Y - 5, 10, 10); }
+  }
+  if (S.trail.length > 1) {
+    g2.strokeStyle = css("--truth"); g2.lineWidth = 1.2; g2.globalAlpha = 0.45; g2.beginPath();
+    S.trail.forEach((p, i) => { const [X, Y] = W2S(p[0], p[1]); i ? g2.lineTo(X, Y) : g2.moveTo(X, Y); });
+    g2.lineTo(...W2S(S.n, S.e)); g2.stroke(); g2.globalAlpha = 1;
+  }
+  if (P.mode === "path") for (const b of S.buoys) {
+    const [X, Y] = W2S(b.n, b.e);
+    g2.strokeStyle = css("--bad"); g2.lineWidth = 1; g2.setLineDash([4, 3]); g2.beginPath(); g2.arc(X, Y, R_KEEP * s, 0, 7); g2.stroke(); g2.setLineDash([]);
+    g2.fillStyle = "#f2c200"; g2.strokeStyle = "#222"; g2.lineWidth = 1; g2.beginPath(); g2.arc(X, Y, Math.max(4, 0.5 * s), 0, 7); g2.fill(); g2.stroke();
+  }
+  // the plans: small votes first, big ones on top, thicker and brighter; the dropped ones red up to where they break a constraint
+  const {M, N, pts, w, hit} = g, stride = Math.max(1, Math.ceil(M / 1500));
+  let wmax = 1e-12; for (let i = 0; i < M; i++) if (w[i] > wmax) wmax = w[i];
+  const a = hex(css("--dear")), b = hex(css("--cheap")), LV = 8, buckets = Array.from({length: LV}, () => []), bad = [];
+  for (let i = 0; i < M; i += stride) {
+    if (hit[i] >= 0) { bad.push(i); continue; }
+    const u = (w[i] / wmax) ** 0.6;
+    buckets[Math.min(LV - 1, Math.floor(u * LV))].push(i);
+  }
+  const trace = (i, last) => {
+    let o = i * (N + 1) * 3;
+    const [X0, Y0] = W2S(pts[o], pts[o + 1]);
+    g2.moveTo(X0, Y0);
+    for (let k = 1; k <= last; k++) { o += 3; g2.lineTo(view.W / 2 + (pts[o + 1] - view.ce) * s, view.Hh / 2 - (pts[o] - view.cn) * s); }
+  };
+  g2.lineJoin = "round";
+  g2.strokeStyle = css("--bad"); g2.globalAlpha = 0.55; g2.lineWidth = 0.9; g2.beginPath();
+  for (const i of bad) trace(i, hit[i] + 1);
+  g2.stroke();
+  buckets.forEach((list, l) => {
+    if (!list.length) return;
+    const u = (l + 0.5) / LV;
+    g2.strokeStyle = `rgb(${a.map((v, j) => Math.round(v + (b[j] - v) * u)).join(",")})`;
+    g2.globalAlpha = 0.3 + 0.7 * u; g2.lineWidth = 0.6 + 2.0 * u * u;
+    g2.beginPath(); for (const i of list) trace(i, N); g2.stroke();
+  });
+  g2.globalAlpha = 1;
+  // the plan it steers by, its first step thick: the one carried out
+  g2.strokeStyle = css("--best"); g2.lineWidth = 3; g2.beginPath();
+  for (let k = 0; k <= N; k++) { const [X, Y] = W2S(g.pa[2 * k], g.pa[2 * k + 1]); k ? g2.lineTo(X, Y) : g2.moveTo(X, Y); }
+  g2.stroke();
+  g2.lineWidth = 6; g2.lineCap = "round"; g2.beginPath(); g2.moveTo(...W2S(g.pa[0], g.pa[1])); g2.lineTo(...W2S(g.pa[2], g.pa[3])); g2.stroke(); g2.lineCap = "butt";
+  if (hover >= 0 && hover < M) { g2.strokeStyle = css("--fg"); g2.lineWidth = 2; g2.beginPath(); trace(hover, N); g2.stroke(); }
+  // the other Otter, its circle, and where the plans predict it
+  if (P.mode === "path" && P.other) {
+    const o = otherAt(S.t), [X, Y] = W2S(o.n, o.e), c = css("--oth");
+    g2.fillStyle = c; g2.globalAlpha = 0.5;
+    for (let k = 2; k <= N; k += 3) { const t = k * P.DT, [PX, PY] = W2S(o.n + o.vn * t, o.e + o.ve * t); g2.beginPath(); g2.arc(PX, PY, 2, 0, 7); g2.fill(); }
+    g2.globalAlpha = 0.7; g2.strokeStyle = c; g2.lineWidth = 1; g2.setLineDash([2, 3]); g2.beginPath(); g2.arc(X, Y, P.dsafe * s, 0, 7); g2.stroke(); g2.setLineDash([]); g2.globalAlpha = 1;
+    otterNet = false; drawOtter(o.n, o.e, o.psi, s, c, c);
+  }
+  if (P.mode === "litter") drawLitter(s);
+  otterNet = P.mode === "litter";
+  drawOtter(S.n, S.e, S.psi, s, css("--hull"), css("--deck"));
+  otterNet = false;
+  // the bow handle, a scale bar, the credit
+  const [BX, BY] = W2S(S.n + 3.2 * Math.cos(S.psi), S.e + 3.2 * Math.sin(S.psi));
+  g2.strokeStyle = css("--muted"); g2.lineWidth = 1; g2.beginPath(); g2.arc(BX, BY, 5, 0, 7); g2.stroke();
+  const len = [5, 10, 20, 50, 100].find((m) => m * s > 60) || 100;
+  g2.strokeStyle = g2.fillStyle = css("--fg"); g2.lineWidth = 2; g2.beginPath(); g2.moveTo(W - 14 - len * s, Hh - 14); g2.lineTo(W - 14, Hh - 14); g2.stroke();
+  g2.font = `11px ${css("--mono")}`; g2.textAlign = "right"; g2.textBaseline = "bottom"; g2.fillText(`${len} m`, W - 14, Hh - 18);
+}
+
+// ── the charts ────────────────────────────────────────────────────────────────────────────────────────────────────
+const cY = new Plot(document.getElementById("cY"), {xLabel: "time from now [s]", yLabel: "off the path [m]"});
+const cR = new Plot(document.getElementById("cR"), {xLabel: "time from now [s]", yLabel: "turn rate [deg/s]"});
+const cU = new Plot(document.getElementById("cU"), {xLabel: "time from now [s]", yLabel: "speed [m/s]"});
+function drawCharts() {
+  const now = S.t, Th = G.N * P.DT, xR = [-20, Math.max(Th, 6) + 1], past = S.hist.filter((h) => h.t >= now - 21);
+  const planY = [], planR = [];
+  S.plans.forEach((pl, i) => {
+    const al = [0.18, 0.3, 0.45, 1][4 - S.plans.length + i], last = i === S.plans.length - 1;
+    if (pl.ye.length) planY.push({x: pl.ye.map((_, k) => pl.t0 + k * P.DT - now), y: pl.ye, color: "--best", width: last ? 2.4 : 1.4, alpha: al, label: last ? "planned" : undefined});
+    const xs = [], ys = [];
+    pl.rr.forEach((r, k) => { xs.push(pl.t0 + k * P.DT - now, pl.t0 + (k + 1) * P.DT - now); ys.push(r, r); });
+    planR.push({x: xs, y: ys, color: "--best", width: last ? 2.4 : 1.4, alpha: al, label: last ? "planned" : undefined});
+  });
+  const band = [{x0: 0, x1: Th, color: "--grid", alpha: 0.8}], vl = [{x: 0, color: "--fg", label: "now", dash: []}];
+  if (P.mode === "path") {
+    cY.o.yLabel = "off the path [m]";
+    const ymax = Math.max(4, ...past.map((h) => Math.abs(h.ye)), ...S.plans.flatMap((p) => p.ye.map(Math.abs)));
+    cY.draw({xRange: xR, yRange: [-Math.min(ymax, 30) * 1.1, Math.min(ymax, 30) * 1.1], bands: band, vlines: vl, hlines: [{y: 0, color: "--muted", label: "the path", dash: [2, 3]}],
+             series: [{x: past.map((h) => h.t - now), y: past.map((h) => h.ye), color: "--truth", width: 2, label: "measured"}, ...planY]});
+  } else {
+    cY.o.yLabel = "looked at lately [%]";
+    cY.draw({xRange: [-20, 1], yRange: [0, 100], vlines: vl, series: [{x: past.map((h) => h.t - now), y: past.map((h) => h.ye), color: "--truth", width: 2, label: "of the area"}]});
+  }
+  cR.draw({xRange: xR, yRange: [-P.rmax * 1.25, P.rmax * 1.25], bands: band, vlines: vl, hlines: [{y: P.rmax, color: "--bad", label: "the limit"}, {y: -P.rmax, color: "--bad"}],
+           series: [{x: past.map((h) => h.t - now), y: past.map((h) => h.r), color: "--truth", width: 2, label: "carried out"},
+                    {x: past.map((h) => h.t - now), y: past.map((h) => h.rc), color: "--muted", width: 1, dash: [3, 3], label: "commanded"}, ...planR]});
+  if (P.mode === "litter" && P.two) {
+    const withU = S.plans.filter((pl) => pl.uu);
+    const planU = withU.map((pl, i) => {
+      const xs = [], ys = [], al = [0.18, 0.3, 0.45, 1][4 - withU.length + i], last = i === withU.length - 1;
+      pl.uu.forEach((u, k) => { xs.push(pl.t0 + k * P.DT - now, pl.t0 + (k + 1) * P.DT - now); ys.push(u, u); });
+      return {x: xs, y: ys, color: "--best", width: last ? 2.4 : 1.4, alpha: al, label: last ? "planned" : undefined};
+    });
+    cU.draw({xRange: xR, yRange: [0, P.Umax * 1.15], bands: band, vlines: vl,
+             hlines: [{y: P.Umax, color: "--bad", label: "the limits"}, {y: U_MIN, color: "--bad"}, {y: P.U, color: "--muted", label: "U", dash: [2, 3]}],
+             series: [{x: past.map((h) => h.t - now), y: past.map((h) => h.u), color: "--truth", width: 2, label: "carried out"},
+                      {x: past.map((h) => h.t - now), y: past.map((h) => h.uc), color: "--muted", width: 1, dash: [3, 3], label: "commanded"}, ...planU]});
+  }
+}
+const wc = document.getElementById("wchart"), wg = wc.getContext("2d");
+function drawVotes() {
+  const [W, Hh] = fit(wc);
+  wg.clearRect(0, 0, W, Hh);
+  const g = G, T = 10 ** P.Ts, xmax = 6 * T, L = 44, Rr = 10, Tt = 8, B = 30, pw = W - L - Rr, ph = Hh - Tt - B;
+  wg.strokeStyle = css("--grid"); wg.lineWidth = 1;
+  wg.font = `11px ${css("--mono")}`; wg.fillStyle = css("--muted");
+  wg.textAlign = "right"; wg.textBaseline = "middle";
+  for (const v of [0, 0.5, 1]) { const y = Tt + ph * (1 - v); wg.beginPath(); wg.moveTo(L, y); wg.lineTo(L + pw, y); wg.stroke(); wg.fillText(v.toFixed(1), L - 6, y); }
+  wg.textAlign = "center"; wg.textBaseline = "top";
+  for (let i = 0; i <= 6; i++) { const x = L + pw * i / 6; wg.fillText(i === 0 ? "0" : `${i} T`, x, Tt + ph + 5); }
+  wg.strokeStyle = css("--best"); wg.lineWidth = 2; wg.beginPath();
+  for (let i = 0; i <= 60; i++) { const u = i / 60, X = L + pw * u, Y = Tt + ph * (1 - Math.exp(-6 * u)); i ? wg.lineTo(X, Y) : wg.moveTo(X, Y); }
+  wg.stroke();
+  wg.fillStyle = css("--cheap"); wg.globalAlpha = 0.65;
+  const stride = Math.max(1, Math.ceil(g.M / 800));
+  for (let i = 0; i < g.M; i += stride) {
+    if (g.hit[i] >= 0) continue;
+    const u = (g.J[i] - g.jmin) / xmax;
+    if (u > 1) continue;
+    wg.beginPath(); wg.arc(L + pw * u, Tt + ph * (1 - Math.exp(-6 * u)), 2.2, 0, 7); wg.fill();
+  }
+  wg.globalAlpha = 1;
+}
+
+// ── the readouts ──────────────────────────────────────────────────────────────────────────────────────────────────
+const fmt = (v, d = 1) => (Number.isFinite(v) ? v.toFixed(d) : "—").replace("-", "−");
+function drawTable() {
+  const g = G, rows = [];
+  if (hover >= 0 && hover < g.M) {
+    rows.push(["this plan's cost above the cheapest", g.hit[hover] >= 0 ? "dropped" : fmt(g.J[hover] - g.jmin, 1)]);
+    rows.push(["its vote", g.hit[hover] >= 0 ? "0" : `${(100 * g.w[hover]).toFixed(2)} %`]);
+  }
+  rows.push(["plans M", `${g.M}, ${g.dropped} dropped`]);
+  rows.push(["effective plans, 1 / Σ w<sub>i</sub><sup>2</sup>", fmt(g.ess, 1)]);
+  rows.push(["model steps per replan", `${g.M * g.N} (N = ${g.N})`]);
+  rows.push(["time per replan, here", `${fmt(g.ms, 2)} ms`]);
+  if (P.mode === "path") {
+    rows.push(["off the path now, y<sub>e</sub>", `${fmt(offPath(S.n, S.e), 2)} m`]);
+    if (P.other) rows.push(["closest to the other Otter so far", `${fmt(S.closest, 1)} m`]);
+  } else {
+    rows.push(["collected", `${S.nCaught}`]);
+    if (P.two) rows.push(["speed now", `${fmt(S.u, 2)} m/s`]);
+    rows.push(["drifted out of the area", `${S.nGone}`]);
+    rows.push(["on the water", `${S.lit.filter((p) => p.caught < 0).length}, ${S.tracks.size} remembered`]);
+  }
+  document.getElementById("tab").innerHTML = rows.map(([a, b]) => `<tr><td class="sym">${a}</td><td>${b}</td></tr>`).join("");
+  const st = document.getElementById("status");
+  st.innerHTML = S.aground ? '<span class="warn">Aground: drag the Otter back into the water.</span>'
+    : g.dropped === g.M ? '<span class="warn">Every plan is dropped: nothing it tried keeps clear.</span>'
+    : P.mode === "litter" && S.tgt ? "Close to a piece: a simple pursuit steers it into the net."
+    : P.steer === "best" ? "The amber plan is the cheapest of this set." : "The amber plan is the weighted average of all the plans.";
+  document.getElementById("hint").textContent = `Nørvasundet · t = ${S.t.toFixed(1)} s · ×${P.scale}` + (running ? "" : " · paused");
+}
+
+// ── the loop ──────────────────────────────────────────────────────────────────────────────────────────────────────
+let running = true, last = performance.now();
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  if (running && !drag) advance(dt * P.scale);
+  drawMap(); drawCharts(); drawVotes(); drawTable();
+  requestAnimationFrame(frame);
+}
+
+// ── the controls ──────────────────────────────────────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const fmtV = {Ms: (v) => `${MLIST[v]}`, T_h: (v) => v.toFixed(0), sig: (v) => v.toFixed(1), alp: (v) => v.toFixed(2), Ts: (v) => (10 ** v >= 10 ? (10 ** v).toFixed(0) : (10 ** v).toFixed(1))};
+function slider(id, d, onchange) {
+  const el = $(id), out = $(id + "V");
+  const show = () => { out.textContent = fmtV[id] ? fmtV[id](P[id]) : P[id].toFixed(d); };
+  el.value = P[id]; show();
+  el.addEventListener("input", () => { P[id] = parseFloat(el.value); show(); onchange && onchange(); });
+  return () => { el.value = P[id]; show(); };
+}
+function seg(id, onpick) {
+  const box = $(id);
+  box.addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    for (const x of box.querySelectorAll("button")) x.setAttribute("aria-pressed", x === b);
+    onpick(b.dataset.v);
+  });
+}
+function showCount() {
+  const N = Math.max(2, Math.round(P.T_h / P.DT));
+  $("count").innerHTML = `Δt = ${P.DT} s · N = ${N} steps · ${MLIST[P.Ms] * N} model steps a replan`;
+}
+const rearrange = () => { arrays(); S.plans = []; replan(); showCount(); };
+const sync = [
+  slider("Ms", 0, rearrange), slider("T_h", 0, rearrange), slider("sig", 1), slider("alp", 2), slider("Ts", 0),
+];
+slider("lam", 2); slider("Rmin", 0, () => buildPath()); slider("dsafe", 1);
+slider("Ae", 1); slider("At", 1); slider("Ab", 2); slider("Ap", 2); slider("nl", 0); slider("drift", 2); slider("fov", 0);
+slider("U", 1); slider("rmax", 0); slider("tau", 1); slider("sigU", 2); slider("Umax", 1); slider("Av", 2);
+function showTwo() {
+  const on = P.mode === "litter" && P.two;
+  document.querySelectorAll(".two").forEach((el) => { el.hidden = !on; });
+  $("cUbox").hidden = !on;
+}
+seg("inputs", (v) => { P.two = v === "2"; if (!P.two && G) G.planU.fill(P.U); showTwo(); S.plans = []; replan(); });
+function applyMode() {
+  document.querySelectorAll("[data-for]").forEach((el) => { el.hidden = el.dataset.for !== P.mode; });
+  $("viewTask").textContent = P.mode === "path" ? "the path" : "the area";
+  $("cYt").innerHTML = P.mode === "path" ? "Off the path y<sub>e</sub> [m]: measured, and planned over the horizon" : "How much of the area it has looked at lately [%]";
+  $("resetPath").hidden = P.mode !== "path";
+  sync.forEach((f) => f());
+  showCount(); showTwo();
+}
+seg("mode", (v) => {
+  if (v === P.mode) return;
+  for (const k of TASK_KEYS) saved[P.mode][k] = P[k];
+  P.mode = v;
+  Object.assign(P, DEF[v], saved[v]);
+  applyMode(); reset();
+});
+seg("steer", (v) => { P.steer = v; $("lgBest").textContent = v === "avg" ? "the weighted average" : "the cheapest plan"; });
+seg("speed", (v) => { P.scale = +v; });
+seg("viewmode", (v) => { P.view = v; });
+$("other").addEventListener("change", (ev) => { P.other = ev.target.checked; S.closest = Infinity; });
+$("respawn").addEventListener("change", (ev) => { P.respawn = ev.target.checked; });
+$("run").addEventListener("click", () => { running = !running; $("run").textContent = running ? "Pause" : "Run"; });
+$("step").addEventListener("click", () => { running = false; $("run").textContent = "Run"; stepOnce(); });
+$("reset").addEventListener("click", () => { reset(); view.cn = S.n; view.ce = S.e; });
+$("buoy").addEventListener("click", () => { const q = nearest(S.n, S.e), a = pointAt(SEG[q.i].s0 + q.u + 15); S.buoys.push({n: a.n, e: a.e}); replan(); });
+$("nobuoys").addEventListener("click", () => { S.buoys = []; replan(); });
+$("resetPath").addEventListener("click", () => { wps = DEF_LOOP(); buildPath(); S.otherS = PL * 0.45 + 1.2 * S.t; });
+$("newlit").addEventListener("click", () => { S.lit = []; S.tracks = new Map(); S.tgt = null; S.nCaught = 0; S.nGone = 0; for (let i = 0; i < P.nl; i++) S.lit.push(spawn(false)); });
+document.addEventListener("keydown", (e) => { if (e.code === "Space" && e.target === document.body) { e.preventDefault(); $("run").click(); } });
+
+// ── the pointer: drag a path handle, the Otter, its bow, a buoy or the other Otter; hover a plan ──────────────────
+let drag = null;
+function pos(ev, el) { const r = el.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; }
+function hit(ev, touch) {
+  const [X, Y] = pos(ev, map), rad = touch ? 22 : 11;
+  const near = (n, e, r) => { const [a, b] = W2S(n, e); return Math.hypot(a - X, b - Y) < r; };
+  if (near(S.n + 3.2 * Math.cos(S.psi), S.e + 3.2 * Math.sin(S.psi), rad)) return {type: "bow"};
+  if (near(S.n, S.e, Math.max(rad, 1.2 * view.s))) return {type: "otter"};
+  if (P.mode === "path") {
+    for (let i = 0; i < wps.length; i++) if (near(wps[i][0], wps[i][1], rad)) return {type: "wp", i};
+    for (let i = 0; i < S.buoys.length; i++) if (near(S.buoys[i].n, S.buoys[i].e, rad)) return {type: "buoy", i};
+    if (P.other) { const o = otherAt(S.t); if (near(o.n, o.e, Math.max(rad, 1.2 * view.s))) return {type: "other"}; }
+  }
+  return null;
+}
+function planNear(X, Y) {
+  const g = G, N = g.N;
+  let best = -1, bd = 8;
+  for (let p = 0; p < g.M; p += Math.max(1, Math.ceil(g.M / 600))) {
+    let o = p * (N + 1) * 3, [ax, ay] = W2S(g.pts[o], g.pts[o + 1]);
+    for (let k = 1; k <= N; k++) {
+      o += 3;
+      const [bx, by] = W2S(g.pts[o], g.pts[o + 1]), dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+      const u = L2 > 0 ? Math.min(Math.max(((X - ax) * dx + (Y - ay) * dy) / L2, 0), 1) : 0;
+      const d = Math.hypot(ax + u * dx - X, ay + u * dy - Y);
+      if (d < bd) { bd = d; best = p; }
+      ax = bx; ay = by;
+    }
+  }
+  return best;
+}
+map.addEventListener("touchstart", (ev) => { if (ev.touches.length === 1 && hit(ev.touches[0], true)) ev.preventDefault(); }, {passive: false});
+map.addEventListener("touchmove", (ev) => { if (drag) ev.preventDefault(); }, {passive: false});
+map.addEventListener("pointerdown", (ev) => {
+  const h = hit(ev, ev.pointerType === "touch");
+  if (!h) return;
+  map.setPointerCapture(ev.pointerId); drag = h; hover = -1;
+});
+map.addEventListener("pointermove", (ev) => {
+  const [X, Y] = pos(ev, map);
+  if (!drag) {
+    if (ev.pointerType === "mouse") { const h = hit(ev, false); map.style.cursor = h ? "grab" : ""; hover = h ? -1 : (running ? -1 : planNear(X, Y)); }
+    return;
+  }
+  const [n, e] = S2W(X, Y);
+  if (drag.type === "otter") { S.n = n; S.e = e; S.trail = []; S.aground = false; }
+  else if (drag.type === "bow") { S.psi = Math.atan2(e - S.e, n - S.n); S.r = 0; }
+  else if (drag.type === "wp") { wps[drag.i] = [n, e]; buildPath(); }
+  else if (drag.type === "buoy") { S.buoys[drag.i] = {n, e}; }
+  else if (drag.type === "other") { const q = nearest(n, e); S.otherS = SEG[q.i].s0 + q.u + 1.2 * S.t; S.closest = Infinity; }
+  S.plans = []; replan();
+});
+const endDrag = () => { drag = null; };
+map.addEventListener("pointerup", endDrag);
+map.addEventListener("pointercancel", endDrag);
+map.addEventListener("pointerleave", () => { if (!drag) hover = -1; });
+map.addEventListener("dblclick", (ev) => {       // on a handle: take it away; on the path: a new corner
+  if (P.mode !== "path") return;
+  const [X, Y] = pos(ev, map), [n, e] = S2W(X, Y), r = 12;
+  for (let i = 0; i < wps.length; i++) { const [a, b] = W2S(wps[i][0], wps[i][1]); if (Math.hypot(a - X, b - Y) < r) { if (wps.length > 3) { wps.splice(i, 1); buildPath(); } return; } }
+  let bd = 12 / view.s, bi = -1;
+  wps.forEach((a, i) => {
+    const b = wps[(i + 1) % wps.length], dn = b[0] - a[0], de = b[1] - a[1], L2 = dn * dn + de * de, u = Math.min(Math.max(((n - a[0]) * dn + (e - a[1]) * de) / L2, 0), 1);
+    const d = Math.hypot(a[0] + u * dn - n, a[1] + u * de - e);
+    if (d < bd) { bd = d; bi = i; }
+  });
+  if (bi >= 0) { wps.splice(bi + 1, 0, [n, e]); buildPath(); }
+});
+
+// ── start ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+window.MPPI = {S, P, get G() { return G; }, get wps() { return wps; }, depthAt, reset, advance, buildPath, nearest, otherAt};
+fetch("depth.bin").then((r) => r.arrayBuffer()).then((b) => {
+  depth = new Uint8Array(b);
+  buildPath(); applyMode(); reset();
+  view.cn = S.n; view.ce = S.e;
+  requestAnimationFrame(frame);
+});
+</script>
+</body>
+</html>
