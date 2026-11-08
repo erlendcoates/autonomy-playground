@@ -41,7 +41,7 @@ change a gain, run it again, and watch what happens. Everything runs in your bro
   <a class="yt" href="https://www.youtube.com/@ErlendCoates">▶ The YouTube channel</a>
 </div>
 
-<h2 class="part">Guidance</h2>
+<h2 class="part">Guidance and control</h2>
 <div class="cards">
   <div class="card panel">
     <h3>LOS Guidance</h3>
@@ -52,18 +52,25 @@ change a gain, run it again, and watch what happens. Everything runs in your bro
       <a class="vid" href="https://youtu.be/e-B-lBFzHRs">▶ Watch the video</a>
     </div>
   </div>
-</div>
-
-<h2 class="part">Collision avoidance</h2>
-<div class="cards">
   <div class="card panel">
     <h3>Simulation-Based MPC</h3>
-    <p>Model predictive control (MPC) on an Otter uncrewed surface vehicle: a fan of turn-rate plans, predicted with a
-    model and scored by a cost, the plans that come too close to a kayak or a buoy dropped, and the cheapest one carried
-    out for one step. Change the horizon, the cost and the plans, and drag the kayak across the path.</p>
+    <p>Model predictive control (MPC) steering an Otter uncrewed surface vehicle along a path. At every step it
+    predicts a fan of turn-rate plans with a model, scores each by a cost, drops the plans that come too close to a kayak
+    or a buoy, and carries out the first step of the cheapest. Change the horizon, the cost and the plans, and drag the
+    kayak across the path.</p>
     <div class="actions">
       <a class="open" href="simulation-based-mpc/">Open the app →</a>
       <a class="vid" href="https://youtu.be/npO-H_k6Q-0">▶ Watch the video</a>
+    </div>
+  </div>
+  <div class="card panel">
+    <h3>MPPI</h3>
+    <p>Model predictive path integral (MPPI) control steering an Otter in Ålesund. At every step it adds random wiggles to
+    its current plan, simulates every plan, weights each by its cost, and carries out the first step of the weighted
+    average. Follow a path past buoys and another Otter, or search for drifting litter while mapping the seabed's depth.</p>
+    <div class="actions">
+      <a class="open" href="mppi/">Open the app →</a>
+      <a class="vid" href="https://youtu.be/LReozcbB-ZE">▶ Watch the video</a>
     </div>
   </div>
 </div>
