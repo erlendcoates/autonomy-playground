@@ -44,3 +44,4 @@ G. Williams, A. Aldrich and E. A. Theodorou, "Model predictive path integral con
 
 Sanjeev Ramkumar Sudha, Marija Popović and Erlend M. Coates, "MPPI-based informative trajectory planning for search and capture of
 drifting targets with ASVs," accepted for publication in *IEEE Robotics and Automation Letters*. [arXiv:2606.12019](https://arxiv.org/abs/2606.12019).
+Code: [github.com/sanjeevrs2000/mppi-search-and-capture](https://github.com/sanjeevrs2000/mppi-search-and-capture).
